@@ -28,8 +28,8 @@ export interface Review {
   fee: bigint;
 }
 
-export type Reading =
-  { ok: true; review: Review } | { ok: false; code: "refused" | "unsupported"; message: string };
+export type Failure = { ok: false; code: "refused" | "unsupported"; message: string };
+export type Reading = { ok: true; review: Review } | Failure;
 
 /**
  * The rules that say what a request or a wallet script must look like. A retry of such an item
@@ -39,7 +39,7 @@ export type Reading =
 const UNSUPPORTED: ReadonlySet<RuleId> = new Set(["C1", "C2", "C5", "P2", "P3", "R3"]);
 
 /** A refusal of the core: its code follows its rule, its message is the core's own. */
-const refusedBy = (refusal: Refusal): Reading => ({
+export const refusedBy = (refusal: Refusal): Failure => ({
   ok: false,
   code: UNSUPPORTED.has(refusal.rule) ? "unsupported" : "refused",
   message: refusal.message

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { expect, type BrowserContext, type Page } from "@playwright/test";
+import { expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { ErgoHDKey } from "@fleet-sdk/wallet";
 import { WALLET_A } from "../fixtures/wallets";
 import { DAPP_ORIGIN } from "../mocks/services";
@@ -436,4 +436,154 @@ export function decimalText(raw: bigint, decimals: number): string {
   const fraction = digits.slice(digits.length - decimals).replace(/0+$/, "");
   const whole = digits.slice(0, digits.length - decimals);
   return fraction ? `${whole}.${fraction}` : whole;
+}
+
+/**
+ * The window texts that the tests fix as its contract: the approve control, and the two row
+ * states of a run. The catalog holds them in English.
+ */
+export const APPROVE = "Approve";
+export const STATE_WORKING = "Working";
+export const STATE_DONE = "Done";
+
+export const approveButton = (win: Page) => win.getByRole("button", { name: APPROVE, exact: true });
+
+/** The one password field of a wallet with its own password: its label ends in "password". */
+export const passwordField = (win: Page) => win.getByRole("textbox", { name: / password$/ });
+
+/** A row of the window shows the state `state` as a text of its own. */
+export const rowState = (row: Locator, state: string) => row.getByText(state, { exact: true });
+
+async function localStorageOf(context: BrowserContext): Promise<Record<string, unknown>> {
+  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+  return worker.evaluate(() => chrome.storage.local.get());
+}
+
+const NONCE_PREFIX = "msigNonce:";
+
+/** The storage keys of the nonce records, as the service worker reads storage. Never a value. */
+export async function nonceKeys(context: BrowserContext): Promise<string[]> {
+  const stored = await localStorageOf(context);
+  return Object.keys(stored)
+    .filter((key) => key.startsWith(NONCE_PREFIX))
+    .sort();
+}
+
+/** The transaction ids of the nonce records: the last part of each storage key, sorted. */
+export async function nonceTxIds(context: BrowserContext): Promise<string[]> {
+  return (await nonceKeys(context)).map((key) => key.split(":").at(-1) ?? "").sort();
+}
+
+/**
+ * The stored text of every nonce record, to compare two readings. The text is encrypted. It is
+ * only ever compared with `sameRecords`, never printed or kept in a failure message.
+ */
+export async function nonceRecords(context: BrowserContext): Promise<Record<string, string>> {
+  const stored = await localStorageOf(context);
+  return Object.fromEntries(
+    Object.entries(stored)
+      .filter(([key]) => key.startsWith(NONCE_PREFIX))
+      .map(([key, value]) => [key, JSON.stringify(value)])
+  );
+}
+
+/** Whether two readings of `nonceRecords` are one and the same, as a boolean. */
+export function sameRecords(a: Record<string, string>, b: Record<string, string>): boolean {
+  const keys = Object.keys(a).sort();
+  return (
+    JSON.stringify(keys) === JSON.stringify(Object.keys(b).sort()) &&
+    keys.every((key) => a[key] === b[key])
+  );
+}
+
+/**
+ * The Web Lock the nonce store takes for every write. Every page of the extension shares it, so
+ * a page of the test can hold it while the window works.
+ */
+const NONCE_LOCK = "nautilus:msig-nonces";
+
+type HoldWorld = {
+  msigHolds?: Map<number, { granted: Promise<void>; release(): void }>;
+};
+
+/** A promise and the call that resolves it, for a test that waits on something it releases. */
+export function latch() {
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => (open = resolve));
+  return { opened, open };
+}
+
+/** Asks `page` for the nonce lock and resolves at once with the hold's id, before it is granted. */
+export function queueHold(page: Page): Promise<number> {
+  return page.evaluate((name) => {
+    const world = globalThis as unknown as HoldWorld;
+    const holds = (world.msigHolds ??= new Map());
+    const id = holds.size + 1;
+    let grant!: () => void;
+    let letGo!: () => void;
+    const granted = new Promise<void>((resolve) => (grant = resolve));
+    const released = new Promise<void>((resolve) => (letGo = resolve));
+    void navigator.locks.request(name, () => {
+      grant();
+      return released;
+    });
+    holds.set(id, { granted, release: () => letGo() });
+    return id;
+  }, NONCE_LOCK);
+}
+
+/** Resolves when the lock is granted to the hold `id` of `page`. */
+export function holdGranted(page: Page, id: number): Promise<void> {
+  return page.evaluate(
+    (id) => (globalThis as unknown as HoldWorld).msigHolds!.get(id)!.granted,
+    id
+  );
+}
+
+/** Lets the hold `id` of `page` go. The next request in the lock's queue is granted. */
+export async function releaseHold(page: Page, id: number): Promise<void> {
+  await page.evaluate(
+    (id) => (globalThis as unknown as HoldWorld).msigHolds!.get(id)!.release(),
+    id
+  );
+}
+
+/** The number of requests for the nonce lock that wait behind a holder. */
+export function waitingForLock(page: Page): Promise<number> {
+  return page.evaluate(
+    async (name) =>
+      ((await navigator.locks.query()).pending ?? []).filter((request) => request.name === name)
+        .length,
+    NONCE_LOCK
+  );
+}
+
+/**
+ * Holds a commit run of at least three items with the first item done, the second at work and
+ * the others not started, and resolves with the hold that keeps it there. `lockPage` is a page
+ * of the extension that is not the window. The run is held by the nonce lock alone: the test
+ * holds it, queues a second hold behind the first item's write, and lets only that write
+ * through. No time decides the result.
+ */
+export async function holdRunAtSecondItem(win: Page, lockPage: Page, password: string) {
+  const first = await queueHold(lockPage);
+  await holdGranted(lockPage, first);
+
+  await passwordField(win).fill(password);
+  await approveButton(win).click();
+  // the first item's write waits behind the hold
+  await expect.poll(() => waitingForLock(lockPage)).toBe(1);
+  await expect(rowState(reviewRows(win).first(), STATE_WORKING)).toBeVisible();
+
+  // the second hold queues behind that write, so the second item's write queues behind the hold
+  const second = await queueHold(lockPage);
+  await expect.poll(() => waitingForLock(lockPage)).toBe(2);
+  await releaseHold(lockPage, first);
+  await holdGranted(lockPage, second);
+
+  await expect(rowState(reviewRows(win).first(), STATE_DONE)).toBeVisible();
+  await expect(rowState(reviewRows(win).nth(1), STATE_WORKING)).toBeVisible();
+  await expect.poll(() => waitingForLock(lockPage)).toBe(1);
+
+  return second;
 }

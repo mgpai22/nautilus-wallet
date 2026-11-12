@@ -480,7 +480,12 @@
       "pays": "Pays",
       "returns": "Returns to the multi-signature address",
       "notDueCommit": "This transaction is not waiting for a commitment from this signer.",
-      "notDueSign": "This transaction is not waiting for a signature from this signer."
+      "notDueSign": "This transaction is not waiting for a signature from this signer.",
+      "approve": "Approve",
+      "working": "Working",
+      "done": "Done",
+      "runFailed": "This transaction could not be committed.",
+      "failed": "Failed"
     }
   },
   "validation": {

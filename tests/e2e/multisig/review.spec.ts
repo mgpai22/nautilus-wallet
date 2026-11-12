@@ -3,6 +3,7 @@ import { WALLET_A } from "../fixtures/wallets";
 import { DAPP_HOST } from "../mocks/services";
 import { clickToClose, connectDapp, expectRequestFrom, invoke } from "../pages/connector";
 import {
+  APPROVE,
   declined,
   DECLINE,
   makeItems,
@@ -21,9 +22,10 @@ test.describe("multisig run in the review window", () => {
   });
 
   // The review names a commit run and a sign run apart and never shows either as a plain
-  // transaction signature. The page's own words (an id, a request text) are never shown as fact,
-  // and no approve control shows before the core can act on it.
-  test("shows the origin, the step in plain words and one row per item, and offers only a decline", async ({
+  // transaction signature. The page's own words (an id, a request text) are never shown as fact.
+  // These requests are due for commitments: the commit run offers Approve, and the sign run
+  // refuses them as not due, so it offers none.
+  test("shows the origin, the step in plain words and one row per item, and approves a commit run only", async ({
     context,
     dapp
   }) => {
@@ -52,9 +54,11 @@ test.describe("multisig run in the review window", () => {
       // the page chooses an id: it is no fact the signer can rely on
       expect(await win.locator("body").innerText()).not.toContain("payroll");
 
-      // before the core no item can be approved, so a button that approves would approve nothing
-      await expect(win.getByRole("button")).toHaveCount(1);
+      // the requests are due for commitments: a commit run offers Approve, a sign run only Decline
       await expect(win.getByRole("button", { name: DECLINE })).toBeVisible();
+      await expect(win.getByRole("button", { name: APPROVE })).toHaveCount(
+        method === "commit" ? 1 : 0
+      );
 
       await clickToClose(win.getByRole("button", { name: DECLINE }));
       await result;

@@ -1,18 +1,28 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onMounted, ref, shallowRef, useTemplateRef, watch } from "vue";
+import type { NonceStore, SignerKey } from "@ergo-msig/core";
+import { useRegle } from "@regle/core";
 import { useEventListener } from "@vueuse/core";
+import { Loader2Icon } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/appStore";
 import { useAssetsStore } from "@/stores/assetsStore";
 import { useWalletStore } from "@/stores/walletStore";
 import { Button } from "@/components/ui/button";
+import { Form, FormField } from "@/components/ui/form";
+import { PasswordInput } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { getPrivateDeriver } from "@/chains/ergo/transaction/prover";
+import { useActivationDelay } from "@/composables/useActivationDelay";
+import { usePasswordPrompt } from "@/composables/usePasswordPrompt";
 import { addressesDbService } from "@/database/addressesDbService";
 import { connectedDAppsDbService } from "@/database/connectedDAppsDbService";
 import { walletsDbService } from "@/database/walletsDbService";
 import MultisigReviewItem from "@/extension/connector/components/MultisigReviewItem.vue";
 import RequestHeader from "@/extension/connector/components/RequestHeader.vue";
+import { openNonceStore } from "@/extension/connector/multisig/nonceStore";
 import { readItem, type Reading } from "@/extension/connector/multisig/review";
+import { runCommits, runFailed, type Job, type RunState } from "@/extension/connector/multisig/run";
 import { childKeys } from "@/extension/connector/multisig/signerKeys";
 import { AsyncRequest } from "@/extension/connector/rpc/asyncRequestQueue";
 import { error, InternalRequest, success } from "@/extension/connector/rpc/protocol";
@@ -29,9 +39,52 @@ const request = ref<AsyncRequest<MultisigArgs>>();
 const walletId = ref(0);
 /** One reading per item, in the order given. Empty until the window has read them. */
 const readings = shallowRef<Reading[]>([]);
-const isSignRun = computed(() => request.value?.type === InternalRequest.MultisigSign);
+/** The wallet's public signer keys, set when the items are read. A commit needs no secret key. */
+let keys: SignerKey[] = [];
+/** One state per item, by position, once the run has reached it. */
+const runs = ref<(RunState | undefined)[]>([]);
+const password = ref("");
+/** The password is being checked and the store opened. */
+const signing = ref(false);
+/** The signer approved: the items are being committed. */
+const running = ref(false);
 
-const detachBeforeUnloadListener = useEventListener(window, "beforeunload", decline);
+const isSignRun = computed(() => request.value?.type === InternalRequest.MultisigSign);
+// a sign run has no approve control until the core signs here
+const canApprove = computed(
+  () => !isSignRun.value && !running.value && readings.value.some((reading) => reading.ok)
+);
+
+const prompt = usePasswordPrompt(
+  () => walletId.value,
+  () => wallet.name
+);
+const pwdInput = useTemplateRef("pwd-input");
+
+/**
+ * Everything the signer reads that can change after the window opens: the readings and the name
+ * and scale of every token, which arrive from the chain later. Each change restarts the wait
+ * before the approve control works, so a click aimed at the old text cannot approve the new.
+ */
+const reviewed = computed(() => [
+  readings.value,
+  readings.value.flatMap((reading) =>
+    reading.ok
+      ? reading.review.outputs.flatMap(({ tokens }) =>
+          tokens.map(({ id }) => assets.metadata.get(id))
+        )
+      : []
+  )
+]);
+const activated = useActivationDelay(reviewed);
+
+const detachBeforeUnloadListener = useEventListener(window, "beforeunload", answer);
+
+const { r$ } = useRegle(
+  { password },
+  { password: { required: prompt.requiredRule() } },
+  { autoDirty: false }
+);
 
 onMounted(async () => {
   request.value =
@@ -86,7 +139,7 @@ async function readItems(run: AsyncRequest<MultisigArgs>, walletId: number) {
     ]);
     if (!stored) throw new Error("The wallet is not stored.");
 
-    const keys = childKeys(stored, addresses.at(-1)?.index ?? 0);
+    keys = childKeys(stored, addresses.at(-1)?.index ?? 0);
     readings.value = run.data.items.map(({ request }) => {
       try {
         return readItem(request, keys, step);
@@ -105,29 +158,87 @@ async function readItems(run: AsyncRequest<MultisigArgs>, walletId: number) {
 }
 
 /**
- * The answer of the whole run: one entry per item, in the order given. An item the review stopped
- * keeps its code and its reason. Every other item is declined.
+ * The store of this wallet's records, opened over the key the password gives. The deriver is
+ * wiped as soon as the store holds what it needs.
+ */
+async function openStore(): Promise<NonceStore> {
+  const deriver = await getPrivateDeriver(walletId.value, prompt.passwordOrSession(password.value));
+
+  try {
+    return await openNonceStore(deriver);
+  } finally {
+    deriver.neutered();
+  }
+}
+
+/**
+ * The signer approves the whole run once. A wrong password keeps the window and answers nothing.
+ * With the right one, each readable item is committed in turn.
+ */
+async function approve() {
+  const run = request.value;
+  if (!run || !canApprove.value || !activated.value || signing.value) return;
+  if (!(await r$.$validate()).valid) return;
+
+  let store: NonceStore | undefined;
+  signing.value = true;
+  try {
+    store = await openStore();
+  } catch (e) {
+    if (await prompt.handleError(e)) {
+      nextTick(() => pwdInput.value?.input?.$el.focus());
+      return;
+    }
+    // no other failure is logged or shown: its text may hold a key or a record
+  } finally {
+    signing.value = false;
+  }
+
+  password.value = "";
+  r$.$reset();
+  running.value = true;
+
+  const jobs: Job[] = readings.value.flatMap((reading, position) =>
+    reading.ok ? [{ position, text: run.data.items[position].request }] : []
+  );
+  const report = (position: number, state: RunState) => (runs.value[position] = state);
+  if (store) await runCommits(jobs, keys, store, report);
+  else for (const { position } of jobs) report(position, runFailed());
+
+  answer();
+  detachBeforeUnloadListener();
+  window.close();
+}
+
+/**
+ * The answer of the whole run: one entry per item, in the order given. A finished item keeps its
+ * request. An item the review or the run stopped keeps its code and its reason. Every other item
+ * is declined.
  */
 function answerOf(items: MultisigArgs["items"]) {
   const declined = t("connector.multisig.declined");
   return success(
     items.map(({ id }, position): MultisigEntry => {
+      const run = runs.value[position];
+      if (run?.state === "done") return { id, ok: true, request: run.request };
+
       const reading = readings.value[position];
-      return reading && !reading.ok
-        ? { id, ok: false, code: reading.code, message: reading.message }
+      const stopped = run?.state === "failed" ? run : reading && !reading.ok ? reading : undefined;
+      return stopped
+        ? { id, ok: false, code: stopped.code, message: stopped.message }
         : { id, ok: false, code: "declined", message: declined };
     })
   );
 }
 
 /** A promise takes the first value only. */
-function decline() {
+function answer() {
   if (!request.value) return;
   request.value.resolve(answerOf(request.value.data.items));
 }
 
 function cancel() {
-  decline();
+  answer();
   detachBeforeUnloadListener();
   window.close();
 }
@@ -150,9 +261,32 @@ function cancel() {
         :key="position"
         :position="position"
         :reading="readings[position - 1]"
+        :run="runs[position - 1]"
       />
     </ul>
   </ScrollArea>
 
-  <Button class="w-full" variant="outline" @click="cancel">{{ t("common.cancel") }}</Button>
+  <div class="flex flex-col gap-4">
+    <Form v-if="canApprove && !prompt.unlocked" @submit="approve">
+      <FormField :validation="r$.password">
+        <PasswordInput
+          ref="pwd-input"
+          v-model="password"
+          :placeholder="prompt.label"
+          :aria-label="prompt.label"
+          :disabled="signing"
+          class="w-full"
+          @blur="r$.password.$touch()"
+        />
+      </FormField>
+    </Form>
+
+    <div class="flex flex-row gap-4">
+      <Button class="flex-1" variant="outline" @click="cancel">{{ t("common.cancel") }}</Button>
+      <Button v-if="canApprove" class="flex-2" :disabled="signing || !activated" @click="approve">
+        <Loader2Icon v-if="signing" class="animate-spin" />
+        <template v-else>{{ t("connector.multisig.approve") }}</template>
+      </Button>
+    </div>
+  </div>
 </template>

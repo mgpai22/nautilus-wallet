@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { BanIcon, CircleDashedIcon, CornerDownLeftIcon } from "@lucide/vue";
+import { BanIcon, CheckIcon, CircleDashedIcon, CornerDownLeftIcon, Loader2Icon } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { useAssetsStore } from "@/stores/assetsStore";
 import { bn, decimalize } from "@/common/bigNumber";
 import { ERG_DECIMALS } from "@/constants/ergo";
 import type { Reading } from "@/extension/connector/multisig/review";
+import type { RunState } from "@/extension/connector/multisig/run";
 
 interface Props {
   position: number;
   /** Absent until the window has read the item. */
   reading?: Reading;
+  /** Absent until the run has reached the item. */
+  run?: RunState;
 }
 
 const props = defineProps<Props>();
@@ -40,7 +43,31 @@ const erg = (nanoErgs: bigint) => `${amount(nanoErgs, ERG_DECIMALS)} ERG`;
     <div class="flex items-center justify-between gap-2">
       <span class="font-semibold">{{ t("connector.multisig.item", { position }) }}</span>
 
-      <span v-if="!reading" class="text-muted-foreground flex items-center gap-1.5 text-xs">
+      <span
+        v-if="run?.state === 'working'"
+        role="status"
+        class="text-muted-foreground flex items-center gap-1.5 text-xs"
+      >
+        <Loader2Icon class="size-4 animate-spin" aria-hidden="true" />
+        {{ t("connector.multisig.working") }}
+      </span>
+      <span
+        v-else-if="run?.state === 'done'"
+        role="status"
+        class="flex items-center gap-1.5 text-xs"
+      >
+        <CheckIcon class="size-4" aria-hidden="true" />
+        {{ t("connector.multisig.done") }}
+      </span>
+      <span
+        v-else-if="run?.state === 'failed'"
+        role="status"
+        class="text-destructive flex items-center gap-1.5 text-xs"
+      >
+        <BanIcon class="size-4" aria-hidden="true" />
+        {{ t("connector.multisig.failed") }}
+      </span>
+      <span v-else-if="!reading" class="text-muted-foreground flex items-center gap-1.5 text-xs">
         <CircleDashedIcon class="size-4" aria-hidden="true" />
         {{ t("connector.multisig.notRead") }}
       </span>
@@ -50,9 +77,10 @@ const erg = (nanoErgs: bigint) => `${amount(nanoErgs, ERG_DECIMALS)} ERG`;
       </span>
     </div>
 
+    <p v-if="run?.state === 'failed'" class="text-xs break-words">{{ run.message }}</p>
     <p v-if="reading && !reading.ok" class="text-xs break-words">{{ reading.message }}</p>
 
-    <dl v-else-if="reading?.ok" class="flex flex-col gap-3 text-xs">
+    <dl v-if="reading?.ok" class="flex flex-col gap-3 text-xs">
       <div>
         <dt class="text-muted-foreground">{{ t("connector.multisig.transactionId") }}</dt>
         <dd class="font-mono break-all">{{ reading.review.txId }}</dd>

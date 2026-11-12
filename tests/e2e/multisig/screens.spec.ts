@@ -1,9 +1,19 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator, Page, TestInfo } from "@playwright/test";
 import { generateMnemonic } from "@fleet-sdk/wallet";
 import { expect, test } from "../fixtures/test";
 import { RECIPIENT_ADDRESS, TEST_TOKEN, WALLET_A } from "../fixtures/wallets";
 import { clickToClose, connectDapp } from "../pages/connector";
-import { DECLINE, reviewRows, runMultisig, withReviewWindow } from "./helpers";
+import {
+  APPROVE,
+  approveButton,
+  DECLINE,
+  holdRunAtSecondItem,
+  passwordField,
+  releaseHold,
+  reviewRows,
+  runMultisig,
+  withReviewWindow
+} from "./helpers";
 import { makeRequest, makeWallet, publicKeyOf } from "./requests";
 import { importButton, openSecretStep } from "./passphrase";
 
@@ -35,6 +45,20 @@ function rowsScroll(win: Page) {
   });
 }
 
+/**
+ * Waits for the finished animations of the window: the buttons fade between themes, so a colour
+ * read or captured right after a switch is a colour in the middle of the fade. A spinner never
+ * finishes and is left out.
+ */
+function settled(win: Page) {
+  return win.evaluate(async () => {
+    const finite = document
+      .getAnimations()
+      .filter((a) => a.effect?.getTiming().iterations !== Infinity);
+    await Promise.all(finite.map((a) => a.finished.catch(() => undefined)));
+  });
+}
+
 type Stop = { name: string; ring: boolean };
 
 /**
@@ -62,7 +86,11 @@ async function walkTabStops(
       const el = document.activeElement as HTMLElement;
       if (el === document.body || snaps.some((s) => s.el === el)) return undefined;
 
-      await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined)));
+      // a spinner never finishes: only the finite animations (focus transitions) are waited for
+      const finite = document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity);
+      await Promise.all(finite.map((a) => a.finished.catch(() => undefined)));
       const style = getComputedStyle(el);
       snaps.push({ el, look: `${style.outline}|${style.boxShadow}` });
       return (
@@ -79,7 +107,10 @@ async function walkTabStops(
   return win.evaluate(async (): Promise<Stop[]> => {
     const snaps = (window as unknown as { tabSnaps: { el: Element; look: string }[] }).tabSnaps;
     (document.activeElement as HTMLElement).blur();
-    await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined)));
+    const finite = document
+      .getAnimations()
+      .filter((a) => a.effect?.getTiming().iterations !== Infinity);
+    await Promise.all(finite.map((a) => a.finished.catch(() => undefined)));
 
     return snaps.map(({ el, look }) => {
       const style = getComputedStyle(el);
@@ -233,12 +264,17 @@ test.describe("multisig review window screens", () => {
       }
       if (refused) await expect(reviewRows(win).last()).toContainText(/C5: /);
       await expect(win.getByText(/not read/i)).toHaveCount(0);
+      // the approve control enables a second after the last change, a token's name: let it
+      // settle, so its colours are measured at rest and not in the middle of that transition
+      await expect(reviewRows(win).first()).toContainText(TEST_TOKEN.name);
+      await expect(approveButton(win)).toBeEnabled();
       const decline = win.getByRole("button", { name: DECLINE });
 
       for (const scheme of SCHEMES) {
         await win.emulateMedia({ colorScheme: scheme });
         if (scheme === "dark") await expect(win.locator("html")).toHaveClass(/dark/);
         else await expect(win.locator("html")).not.toHaveClass(/dark/);
+        await settled(win);
 
         const shot = (state: string) =>
           win.screenshot({
@@ -290,6 +326,136 @@ test.describe("multisig review window screens", () => {
       await result;
     });
   }
+});
+
+type RunScreen = {
+  /** Controls that must show whole in the window. */
+  inView: Locator[];
+  /** Tab stops the window must offer. */
+  stops: string[];
+  /** Whether a text field is among the tab stops. Not checked when absent. */
+  field?: boolean;
+  /** Runs in each theme before the checks: a control that waits for the delay must be ready. */
+  ready?: () => Promise<unknown>;
+  /** A row to capture on its own, in each theme. */
+  row?: Locator;
+};
+
+/**
+ * The screen checks for one state of the window in both themes: a capture, no scroll of the
+ * page, the named controls whole in the window, text at AA, and keyboard stops with a ring.
+ */
+async function checkRunScreen(win: Page, testInfo: TestInfo, label: string, screen: RunScreen) {
+  for (const scheme of SCHEMES) {
+    await win.emulateMedia({ colorScheme: scheme });
+    if (scheme === "dark") await expect(win.locator("html")).toHaveClass(/dark/);
+    else await expect(win.locator("html")).not.toHaveClass(/dark/);
+    await settled(win);
+    await screen.ready?.();
+
+    const shot = (state: string) =>
+      win.screenshot({ path: testInfo.outputPath(`multisig-run-${label}-${scheme}-${state}.png`) });
+    await shot("at-rest");
+    if (screen.row) {
+      // the row itself, scrolled into view, so its state and its spinner are on file
+      await screen.row.scrollIntoViewIfNeeded();
+      await expect(screen.row).toBeInViewport();
+      await screen.row.screenshot({
+        path: testInfo.outputPath(`multisig-run-${label}-${scheme}-row.png`)
+      });
+    }
+
+    expect(await pageOverflow(win), `${label}, ${scheme}: the page scrolls`).toEqual({
+      sideways: 0,
+      vertical: 0
+    });
+    for (const target of screen.inView) await expect(target).toBeInViewport({ ratio: 1 });
+    expect(await contrastFailures(win), `${label}, ${scheme}: text below AA`).toEqual([]);
+
+    let field = false;
+    const stops = await walkTabStops(win, async (name, stop) => {
+      field ||= await win.evaluate(() => document.activeElement?.tagName === "INPUT");
+      if (stop < 4) await shot(`focus-${stop}-${name.toLowerCase().replace(/\W+/g, "-")}`);
+    });
+    expect(
+      stops.map((s) => s.name),
+      `${label}, ${scheme}: tab stops`
+    ).toEqual(expect.arrayContaining(screen.stops));
+    if (screen.field !== undefined)
+      expect(field, `${label}, ${scheme}: a field is a stop`).toBe(screen.field);
+    expect(
+      stops.filter((s) => !s.ring),
+      `${label}, ${scheme}: stops without a focus ring`
+    ).toEqual([]);
+  }
+}
+
+test.describe("multisig run screens", () => {
+  test.beforeEach(async ({ popup, context, dapp, chain }) => {
+    chain.addToken(TEST_TOKEN);
+    await popup.importWallet(WALLET_A);
+    await connectDapp(context, dapp, WALLET_A.name);
+  });
+
+  // The approve control and the password field stay in the window and clear of the rows, the page
+  // never scrolls sideways, every control has a focus ring and a tab stop, and muted text meets AA
+  // in the dark theme.
+  test("the review with the approve control and the password field fits the window with focus rings and AA contrast in both themes", async ({
+    context,
+    dapp
+  }, testInfo) => {
+    test.setTimeout(180_000);
+    const { items } = await readableItems(3);
+
+    const { win, result } = await withReviewWindow(context, () =>
+      runMultisig(dapp, "commit", items)
+    );
+    await win.setViewportSize(WINDOW_SIZE);
+    await expect(reviewRows(win)).toHaveCount(3);
+    // a token's name arrives after the reading and restarts the delay: wait for it, then for the control
+    await expect(reviewRows(win).first()).toContainText(TEST_TOKEN.name);
+    const decline = win.getByRole("button", { name: DECLINE });
+
+    await checkRunScreen(win, testInfo, "approval", {
+      inView: [approveButton(win), decline, passwordField(win)],
+      stops: [APPROVE, DECLINE],
+      field: true,
+      ready: () => expect(approveButton(win)).toBeEnabled()
+    });
+
+    await clickToClose(decline);
+    await result;
+  });
+
+  // A run's working and done rows never push Decline out of the window or drop the focus ring, and
+  // their state text meets AA in both themes.
+  test("a run with a row done and a row working fits the window with focus rings and AA contrast in both themes", async ({
+    context,
+    dapp,
+    popup
+  }, testInfo) => {
+    test.setTimeout(180_000);
+    const { items } = await readableItems(3);
+
+    const { win, result } = await withReviewWindow(context, () =>
+      runMultisig(dapp, "commit", items)
+    );
+    await win.setViewportSize(WINDOW_SIZE);
+    await expect(reviewRows(win)).toHaveCount(3);
+    await expect(approveButton(win)).toBeVisible();
+
+    const hold = await holdRunAtSecondItem(win, popup.page, WALLET_A.password);
+    const decline = win.getByRole("button", { name: DECLINE });
+    await checkRunScreen(win, testInfo, "working", {
+      inView: [decline],
+      stops: [DECLINE],
+      row: reviewRows(win).nth(1)
+    });
+
+    await releaseHold(popup.page, hold);
+    const outcome = await result;
+    expect(outcome.ok).toBe(true);
+  });
 });
 
 /** The text the passphrase adds to the secret step: its labels, its hint and its messages. */

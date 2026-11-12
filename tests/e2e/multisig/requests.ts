@@ -239,3 +239,24 @@ export function cellsOf(text: string): Uint8Array[][] {
   const { hints }: { hints: string[][] } = JSON.parse(JSON.parse(text).MSR);
   return hints.map((row) => row.map((cell) => base64.decode(cell)));
 }
+
+/** The CSR's own fields, decoded: the reduced transaction and the input boxes, as base64 text. */
+export function unpackCsr(text: string): { reducedTx: string; inputs: string[] } {
+  return JSON.parse(JSON.parse(text).CSR);
+}
+
+/**
+ * An MSR as the test reads it, with the key lists of both JSON levels so a test can assert that
+ * nothing but `tx`, `boxes` and `hints` rides in a request that leaves the window.
+ */
+export function unpackMsr(text: string) {
+  const outer: Record<string, string> = JSON.parse(text);
+  const inner: { tx: string; boxes: string[]; hints: string[][] } = JSON.parse(outer.MSR);
+  return {
+    outerKeys: Object.keys(outer).sort(),
+    innerKeys: Object.keys(inner).sort(),
+    tx: inner.tx,
+    boxes: inner.boxes,
+    hints: inner.hints
+  };
+}
