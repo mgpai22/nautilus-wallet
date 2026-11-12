@@ -1,4 +1,4 @@
-import type { Locator, Page, TestInfo } from "@playwright/test";
+import type { BrowserContext, Locator, Page, TestInfo } from "@playwright/test";
 import { generateMnemonic } from "@fleet-sdk/wallet";
 import { expect, test } from "../fixtures/test";
 import { RECIPIENT_ADDRESS, TEST_TOKEN, WALLET_A } from "../fixtures/wallets";
@@ -6,15 +6,18 @@ import { clickToClose, connectDapp } from "../pages/connector";
 import {
   APPROVE,
   approveButton,
+  approvedRun,
   DECLINE,
   holdRunAtSecondItem,
   passwordField,
   releaseHold,
+  requestOf,
   reviewRows,
   runMultisig,
   withReviewWindow
 } from "./helpers";
-import { makeRequest, makeWallet, publicKeyOf } from "./requests";
+import { cosignerCommit } from "./cosigners";
+import { cosignerColumns, makeRequest, makeWallet, publicKeyOf } from "./requests";
 import { importButton, openSecretStep } from "./passphrase";
 
 /** The size the background opens the connector window at (`src/common/uiHelpers.ts`). */
@@ -212,8 +215,9 @@ function contrastFailures(win: Page, within?: string) {
  */
 async function readableItems(count: number) {
   const signer = await publicKeyOf(WALLET_A, 0);
-  const built = Array.from({ length: count }, () =>
-    makeRequest(makeWallet(2, 3, signer), 1, {
+  const wallets = Array.from({ length: count }, () => makeWallet(2, 3, signer));
+  const built = wallets.map((wallet) =>
+    makeRequest(wallet, 1, {
       address: RECIPIENT_ADDRESS,
       value: 123_456_789n,
       tokens: [{ id: TEST_TOKEN.tokenId, amount: 12_345n }]
@@ -222,8 +226,23 @@ async function readableItems(count: number) {
 
   return {
     items: built.map(({ csr }, i) => ({ id: `payroll-${i + 1}`, request: csr })),
-    txIds: built.map(({ txId }) => txId)
+    txIds: built.map(({ txId }) => txId),
+    wallets
   };
+}
+
+/**
+ * `count` items for a sign run, as `readableItems` makes them: the wallet commits to each through
+ * the window, and the first co-signer of each commits after it. Every item is due for a signature.
+ */
+async function signableItems(context: BrowserContext, dapp: Page, count: number) {
+  const { items, wallets } = await readableItems(count);
+  const committed = await approvedRun(context, dapp, "commit", items, WALLET_A.password);
+
+  return committed.map((entry, i) => ({
+    id: items[i].id,
+    request: cosignerCommit(requestOf(entry), wallets[i], cosignerColumns(wallets[i])[0])
+  }));
 }
 
 test.describe("multisig review window screens", () => {
@@ -447,6 +466,62 @@ test.describe("multisig run screens", () => {
     const hold = await holdRunAtSecondItem(win, popup.page, WALLET_A.password);
     const decline = win.getByRole("button", { name: DECLINE });
     await checkRunScreen(win, testInfo, "working", {
+      inView: [decline],
+      stops: [DECLINE],
+      row: reviewRows(win).nth(1)
+    });
+
+    await releaseHold(popup.page, hold);
+    const outcome = await result;
+    expect(outcome.ok).toBe(true);
+  });
+
+  // In a sign run, the approve control and the password field stay in the window and clear of the
+  // rows, the page never scrolls sideways, every control has a focus ring and a tab stop, and muted
+  // text meets AA in the dark theme.
+  test("the review of a sign run with the approve control and the password field fits the window with focus rings and AA contrast in both themes", async ({
+    context,
+    dapp
+  }, testInfo) => {
+    test.setTimeout(180_000);
+    const items = await signableItems(context, dapp, 3);
+
+    const { win, result } = await withReviewWindow(context, () => runMultisig(dapp, "sign", items));
+    await win.setViewportSize(WINDOW_SIZE);
+    await expect(reviewRows(win)).toHaveCount(3);
+    // a token's name arrives after the reading and restarts the delay: wait for it, then for the control
+    await expect(reviewRows(win).first()).toContainText(TEST_TOKEN.name);
+    const decline = win.getByRole("button", { name: DECLINE });
+
+    await checkRunScreen(win, testInfo, "sign-approval", {
+      inView: [approveButton(win), decline, passwordField(win)],
+      stops: [APPROVE, DECLINE],
+      field: true,
+      ready: () => expect(approveButton(win)).toBeEnabled()
+    });
+
+    await clickToClose(decline);
+    await result;
+  });
+
+  // A sign run's working and done rows never push Decline out of the window or drop the focus ring,
+  // and their state text meets AA in both themes.
+  test("a sign run with a row done and a row working fits the window with focus rings and AA contrast in both themes", async ({
+    context,
+    dapp,
+    popup
+  }, testInfo) => {
+    test.setTimeout(180_000);
+    const items = await signableItems(context, dapp, 3);
+
+    const { win, result } = await withReviewWindow(context, () => runMultisig(dapp, "sign", items));
+    await win.setViewportSize(WINDOW_SIZE);
+    await expect(reviewRows(win)).toHaveCount(3);
+    await expect(approveButton(win)).toBeVisible();
+
+    const hold = await holdRunAtSecondItem(win, popup.page, WALLET_A.password);
+    const decline = win.getByRole("button", { name: DECLINE });
+    await checkRunScreen(win, testInfo, "sign-working", {
       inView: [decline],
       stops: [DECLINE],
       row: reviewRows(win).nth(1)

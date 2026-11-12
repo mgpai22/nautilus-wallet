@@ -4,8 +4,8 @@ import { expect, type BrowserContext, type Locator, type Page } from "@playwrigh
 import { ErgoHDKey } from "@fleet-sdk/wallet";
 import { WALLET_A } from "../fixtures/wallets";
 import { DAPP_ORIGIN } from "../mocks/services";
-import { invoke, type Outcome } from "../pages/connector";
-import { makeRequest, makeWallet } from "./requests";
+import { clickToClose, invoke, type Outcome } from "../pages/connector";
+import { cellsOf, makeRequest, makeWallet, unpackCsr, unpackMsr } from "./requests";
 
 /** The wallet's English catalog: the window runs in `en-US` (the browser locale of the fixtures). */
 const catalog = JSON.parse(
@@ -559,31 +559,115 @@ export function waitingForLock(page: Page): Promise<number> {
 }
 
 /**
- * Holds a commit run of at least three items with the first item done, the second at work and
- * the others not started, and resolves with the hold that keeps it there. `lockPage` is a page
- * of the extension that is not the window. The run is held by the nonce lock alone: the test
- * holds it, queues a second hold behind the first item's write, and lets only that write
- * through. No time decides the result.
+ * Holds a run of more than `finished` items with that many items done, the next one at work and
+ * the others not started, and resolves with the hold that keeps it there. `lockPage` is a page of
+ * the extension that is not the window. The run is held by the nonce lock alone: the test holds
+ * it, queues the next hold behind the working item's write, and lets only that write through.
+ * No time decides the result. The first row is at work while the first hold stands.
  */
-export async function holdRunAtSecondItem(win: Page, lockPage: Page, password: string) {
-  const first = await queueHold(lockPage);
-  await holdGranted(lockPage, first);
+export async function holdRunAfter(
+  win: Page,
+  lockPage: Page,
+  password: string,
+  finished: number,
+  timeout = 60_000
+) {
+  let hold = await queueHold(lockPage);
+  await holdGranted(lockPage, hold);
 
   await passwordField(win).fill(password);
   await approveButton(win).click();
   // the first item's write waits behind the hold
-  await expect.poll(() => waitingForLock(lockPage)).toBe(1);
-  await expect(rowState(reviewRows(win).first(), STATE_WORKING)).toBeVisible();
+  await expect.poll(() => waitingForLock(lockPage), { timeout }).toBe(1);
+  await expect(rowState(reviewRows(win).first(), STATE_WORKING)).toBeVisible({ timeout });
 
-  // the second hold queues behind that write, so the second item's write queues behind the hold
-  const second = await queueHold(lockPage);
-  await expect.poll(() => waitingForLock(lockPage)).toBe(2);
-  await releaseHold(lockPage, first);
-  await holdGranted(lockPage, second);
+  for (let done = 1; done <= finished; done++) {
+    // the next hold queues behind that write, so the next item's write queues behind the hold
+    const next = await queueHold(lockPage);
+    await expect.poll(() => waitingForLock(lockPage), { timeout }).toBe(2);
+    await releaseHold(lockPage, hold);
+    await holdGranted(lockPage, next);
 
-  await expect(rowState(reviewRows(win).first(), STATE_DONE)).toBeVisible();
-  await expect(rowState(reviewRows(win).nth(1), STATE_WORKING)).toBeVisible();
-  await expect.poll(() => waitingForLock(lockPage)).toBe(1);
+    await expect(rowState(reviewRows(win).nth(done - 1), STATE_DONE)).toBeVisible({ timeout });
+    await expect(rowState(reviewRows(win).nth(done), STATE_WORKING)).toBeVisible({ timeout });
+    await expect.poll(() => waitingForLock(lockPage), { timeout }).toBe(1);
+    hold = next;
+  }
 
-  return second;
+  return hold;
+}
+
+/** The first row done, the second at work and the others not started: `holdRunAfter` one item. */
+export const holdRunAtSecondItem = (win: Page, lockPage: Page, password: string) =>
+  holdRunAfter(win, lockPage, password, 1);
+
+/**
+ * One run through the window as a signer takes it: the password, Approve, and the page's answer.
+ * A run the page could not answer fails the test.
+ */
+export async function approvedRun(
+  context: BrowserContext,
+  dapp: Page,
+  method: Method,
+  items: { id: string; request: string }[],
+  password: string,
+  timeout = 10_000
+) {
+  const { win, result } = await withReviewWindow(context, () => runMultisig(dapp, method, items));
+  await expect(approveButton(win), `the ${method} run offers Approve`).toBeVisible({ timeout });
+  await passwordField(win).fill(password);
+  await clickToClose(approveButton(win));
+
+  const outcome = await result;
+  if (!outcome.ok) throw new Error(`The ${method} call was rejected.`);
+  return outcome.value;
+}
+
+/** The text of an answer's request, or a failure that names the item and its code. */
+export function requestOf(entry: MultisigEntry): string {
+  if (!entry.ok) throw new Error(`${entry.id} gave no request: ${entry.code}`);
+  return entry.request;
+}
+
+/**
+ * Removes the nonce record of one transaction, as the service worker reaches storage. A test
+ * does this to make a record the wallet lost.
+ */
+export async function removeNonceRecord(context: BrowserContext, txId: string): Promise<void> {
+  const keys = (await nonceKeys(context)).filter((key) => key.endsWith(`:${txId}`));
+  expect(keys, `the records of ${txId}`).toHaveLength(1);
+
+  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+  await worker.evaluate((keys) => chrome.storage.local.remove(keys), keys);
+}
+
+/** The sizes a cell of a Minotaur request can have: empty, a commitment, a response, a simulated response. */
+const CELL_BYTES = [0, 33, 89, 90];
+
+/**
+ * One answer of a run, judged as a page sees it: exactly the fields `id`, `ok` and `request`, an
+ * MSR that holds `tx`, `boxes` and `hints` and nothing else, and every cell of a length a
+ * Minotaur request allows. No nonce can ride in a field or a cell of another size.
+ * `item` is the request that was sent: `tx` and `boxes` stay as they were.
+ */
+export function expectAnswerShape(entry: MultisigEntry, item: { id: string; request: string }) {
+  expect(Object.keys(entry).sort(), `fields of ${item.id}`).toEqual(["id", "ok", "request"]);
+  const request = requestOf(entry);
+  const msr = unpackMsr(request);
+  expect(entry.id).toBe(item.id);
+  expect(msr.outerKeys).toEqual(["MSR"]);
+  expect(msr.innerKeys).toEqual(["boxes", "hints", "tx"]);
+
+  const sent = item.request.includes('"CSR"') ? unpackCsr(item.request) : unpackMsr(item.request);
+  expect(msr.tx === ("reducedTx" in sent ? sent.reducedTx : sent.tx), "tx is unchanged").toBe(true);
+  expect(
+    JSON.stringify(msr.boxes) === JSON.stringify("inputs" in sent ? sent.inputs : sent.boxes),
+    "boxes are unchanged"
+  ).toBe(true);
+  expect(
+    cellsOf(request)
+      .flatMap((row) => row.map((cell) => cell.length))
+      .filter((length) => !CELL_BYTES.includes(length)),
+    `cell lengths of ${item.id} outside ${CELL_BYTES}`
+  ).toEqual([]);
 }

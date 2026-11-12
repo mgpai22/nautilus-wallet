@@ -9,6 +9,7 @@ import {
   Address,
   BlockHeaders,
   BoxValue,
+  Constant,
   Contract,
   DataInputs,
   ErgoBox,
@@ -20,6 +21,7 @@ import {
   ErgoTree,
   I64,
   NetworkPrefix,
+  NonMandatoryRegisterId,
   Parameters,
   PreHeader,
   ReducedTransaction,
@@ -61,7 +63,7 @@ const HEADERS = BlockHeaders.from_json(
   }))
 );
 const HEIGHT = headers.blockHeaders[0].height;
-const CONTEXT = new ErgoStateContext(
+export const CONTEXT = new ErgoStateContext(
   PreHeader.from_block_header(HEADERS.get(0)),
   HEADERS,
   Parameters.default_parameters()
@@ -77,17 +79,23 @@ function vlq(value: number): number[] {
 const boxValue = (value: bigint) => BoxValue.from_i64(I64.from_str(String(value)));
 
 /**
+ * The co-signers' secret keys by column. They stay in this file's map and the co-signer harness
+ * (`cosigners.ts`) reads them: a wallet object holds none, so no test can print one.
+ */
+const cosignerSecrets = new WeakMap<MultisigWallet, Map<number, SecretKey>>();
+
+/**
  * A `k` of `n` wallet: the signer's key and `n - 1` co-signer keys made here, in Minotaur's
  * script (minotaur-wallet, apps/wallet/src/action/address.ts:22-38).
  */
 export function makeWallet(k: number, n: number, signerKey: Uint8Array): MultisigWallet {
-  const cosigners = Array.from({ length: n - 1 }, () =>
-    SecretKey.random_dlog().get_address().content_bytes()
+  const secrets = new Map(
+    Array.from({ length: n - 1 }, () => {
+      const secret = SecretKey.random_dlog();
+      return [hex.encode(secret.get_address().content_bytes()), secret] as const;
+    })
   );
-  const keys = [signerKey, ...cosigners]
-    .map((key) => hex.encode(key))
-    .sort()
-    .map(hex.decode);
+  const keys = [hex.encode(signerKey), ...secrets.keys()].sort().map(hex.decode);
   const script = Uint8Array.of(
     0x10,
     ...vlq(n + 1),
@@ -103,7 +111,28 @@ export function makeWallet(k: number, n: number, signerKey: Uint8Array): Multisi
     ...keys.flatMap((_, i) => [0x73, ...vlq(i + 1)])
   );
 
-  return { k, keys, script };
+  const wallet: MultisigWallet = { k, keys, script };
+  cosignerSecrets.set(
+    wallet,
+    new Map(
+      keys.flatMap((key, column) => {
+        const secret = secrets.get(hex.encode(key));
+        return secret ? [[column, secret] as const] : [];
+      })
+    )
+  );
+  return wallet;
+}
+
+/** The columns of the wallet's co-signers: every column but the signer's own. */
+export const cosignerColumns = (wallet: MultisigWallet) => [
+  ...(cosignerSecrets.get(wallet)?.keys() ?? [])
+];
+
+export function cosignerSecret(wallet: MultisigWallet, column: number): SecretKey {
+  const secret = cosignerSecrets.get(wallet)?.get(column);
+  if (!secret) throw new RangeError(`column ${column} is not a co-signer of this wallet`);
+  return secret;
 }
 
 export type Payment = {
@@ -111,6 +140,8 @@ export type Payment = {
   value: bigint;
   /** Held by the first input box and paid out whole. */
   tokens?: { id: string; amount: bigint }[];
+  /** Bytes of random data in R4: how a cheap output grows the request (see `makeFullSizeRequest`). */
+  register?: number;
 };
 
 /** An output as the builder made it: what a review of the request must show. */
@@ -167,8 +198,14 @@ export function makeRequest(wallet: MultisigWallet, inputCount: number, ...payme
     );
     for (const { id, amount } of payment.tokens ?? [])
       builder.add_token(TokenId.from_str(id), tokenAmount(amount));
+    if (payment.register)
+      builder.set_register_value(
+        NonMandatoryRegisterId.R4,
+        Constant.from_byte_array(crypto.getRandomValues(new Uint8Array(payment.register)))
+      );
     candidates.push(builder.build());
-    built.push({ ...payment, tokens: payment.tokens ?? [], toWallet: false });
+    const { register: _register, ...shown } = payment;
+    built.push({ ...shown, tokens: payment.tokens ?? [], toWallet: false });
   }
   const paid = payments.reduce((sum, { value }) => sum + value, 0n);
   const rest = BOX_VALUE * BigInt(inputCount) - paid - FEE;
@@ -202,6 +239,21 @@ export function makeRequest(wallet: MultisigWallet, inputCount: number, ...payme
     outputs: built,
     fee: FEE
   };
+}
+
+/**
+ * The cheapest shape that reaches the call's limit of 1,000,000 characters: ONE input
+ * and 175 outputs that each carry a 3,900 byte R4 (a CSR of 921,947 characters). sigma-rust
+ * parses a box in a window of 4,096 bytes, so no register can be larger. The core skips a byte
+ * register in one step of its output search, and one input means one nonce, one row of cells
+ * and one proof to make. The same size from inputs would mean about 170 of each.
+ */
+export function makeFullSizeRequest(wallet: MultisigWallet, address: string) {
+  return makeRequest(
+    wallet,
+    1,
+    ...Array.from({ length: 175 }, () => ({ address, value: 2_000_000n, register: 3_900 }))
+  );
 }
 
 /**

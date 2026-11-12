@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, shallowRef, useTemplateRef, watch } from "vue";
-import type { NonceStore, SignerKey } from "@ergo-msig/core";
+import type { SignerKey } from "@ergo-msig/core";
 import { useRegle } from "@regle/core";
 import { useEventListener } from "@vueuse/core";
 import { Loader2Icon } from "@lucide/vue";
@@ -20,10 +20,16 @@ import { connectedDAppsDbService } from "@/database/connectedDAppsDbService";
 import { walletsDbService } from "@/database/walletsDbService";
 import MultisigReviewItem from "@/extension/connector/components/MultisigReviewItem.vue";
 import RequestHeader from "@/extension/connector/components/RequestHeader.vue";
-import { openNonceStore } from "@/extension/connector/multisig/nonceStore";
+import { openNonceStore, removeRecords } from "@/extension/connector/multisig/nonceStore";
 import { readItem, type Reading } from "@/extension/connector/multisig/review";
-import { runCommits, runFailed, type Job, type RunState } from "@/extension/connector/multisig/run";
-import { childKeys } from "@/extension/connector/multisig/signerKeys";
+import {
+  runCommits,
+  runFailed,
+  runSigns,
+  type Job,
+  type RunState
+} from "@/extension/connector/multisig/run";
+import { childKeys, withSecrets } from "@/extension/connector/multisig/signerKeys";
 import { AsyncRequest } from "@/extension/connector/rpc/asyncRequestQueue";
 import { error, InternalRequest, success } from "@/extension/connector/rpc/protocol";
 import { queue } from "@/extension/connector/rpc/uiRpcHandlers";
@@ -46,14 +52,11 @@ const runs = ref<(RunState | undefined)[]>([]);
 const password = ref("");
 /** The password is being checked and the store opened. */
 const signing = ref(false);
-/** The signer approved: the items are being committed. */
+/** The signer approved: the items are being committed or signed. */
 const running = ref(false);
 
 const isSignRun = computed(() => request.value?.type === InternalRequest.MultisigSign);
-// a sign run has no approve control until the core signs here
-const canApprove = computed(
-  () => !isSignRun.value && !running.value && readings.value.some((reading) => reading.ok)
-);
+const canApprove = computed(() => !running.value && readings.value.some((reading) => reading.ok));
 
 const prompt = usePasswordPrompt(
   () => walletId.value,
@@ -158,32 +161,33 @@ async function readItems(run: AsyncRequest<MultisigArgs>, walletId: number) {
 }
 
 /**
- * The store of this wallet's records, opened over the key the password gives. The deriver is
- * wiped as soon as the store holds what it needs.
+ * The wallet's deriver, taken once for the run, and the store of its records opened over the key
+ * the deriver gives. The caller wipes the deriver when it is done with it.
  */
-async function openStore(): Promise<NonceStore> {
+async function openStore() {
   const deriver = await getPrivateDeriver(walletId.value, prompt.passwordOrSession(password.value));
 
   try {
-    return await openNonceStore(deriver);
-  } finally {
+    return { deriver, store: await openNonceStore(deriver) };
+  } catch (e) {
     deriver.neutered();
+    throw e;
   }
 }
 
 /**
  * The signer approves the whole run once. A wrong password keeps the window and answers nothing.
- * With the right one, each readable item is committed in turn.
+ * With the right one, each readable item is committed or signed in turn.
  */
 async function approve() {
   const run = request.value;
   if (!run || !canApprove.value || !activated.value || signing.value) return;
   if (!(await r$.$validate()).valid) return;
 
-  let store: NonceStore | undefined;
+  let opened: Awaited<ReturnType<typeof openStore>> | undefined;
   signing.value = true;
   try {
-    store = await openStore();
+    opened = await openStore();
   } catch (e) {
     if (await prompt.handleError(e)) {
       nextTick(() => pwdInput.value?.input?.$el.focus());
@@ -199,11 +203,32 @@ async function approve() {
   running.value = true;
 
   const jobs: Job[] = readings.value.flatMap((reading, position) =>
-    reading.ok ? [{ position, text: run.data.items[position].request }] : []
+    reading.ok
+      ? [{ position, text: run.data.items[position].request, txId: reading.review.txId }]
+      : []
   );
   const report = (position: number, state: RunState) => (runs.value[position] = state);
-  if (store) await runCommits(jobs, keys, store, report);
-  else for (const { position } of jobs) report(position, runFailed());
+  const step = isSignRun.value ? "sign" : "commit";
+  if (!opened) {
+    for (const { position } of jobs) report(position, runFailed(step));
+  } else if (step === "commit") {
+    // a commit needs no secret key: the deriver is wiped once the store holds what it needs
+    opened.deriver.neutered();
+    await runCommits(jobs, keys, opened.store, report);
+  } else {
+    const { deriver, store } = opened;
+    try {
+      await runSigns(
+        jobs,
+        withSecrets(keys, deriver),
+        store,
+        (txId) => removeRecords(deriver.publicKey, txId),
+        report
+      );
+    } finally {
+      deriver.neutered();
+    }
+  }
 
   answer();
   detachBeforeUnloadListener();

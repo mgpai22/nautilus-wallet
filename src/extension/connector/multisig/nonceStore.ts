@@ -44,6 +44,25 @@ function toStored(binding: Pick<NonceRecord, "challenge" | "simulated">) {
   };
 }
 
+/** The wallet is named by a hash of its public key, never by its database id. */
+async function walletHashOf(publicKey: Uint8Array) {
+  return hex.encode(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(publicKey)))
+  );
+}
+
+const storageKeyFor = (walletHash: string, txId: string) => `msigNonce:${walletHash}:${txId}`;
+
+/**
+ * Removes the records of one transaction of the wallet whose public key is given. It needs no
+ * decryption key: the storage key names the transaction. It takes the lock of every write, so a
+ * write that read the record before cannot put it back.
+ */
+export async function removeRecords(publicKey: Uint8Array, txId: string): Promise<void> {
+  const storageKey = storageKeyFor(await walletHashOf(publicKey), txId);
+  await navigator.locks.request(LOCK_NAME, () => storage.local.remove(storageKey));
+}
+
 /**
  * The store over `wallet`'s records. `wallet` is the deriver `getPrivateDeriver` gives, whose
  * keys are those of the change path.
@@ -68,10 +87,8 @@ export async function openNonceStore(wallet: {
     false,
     ["encrypt", "decrypt"]
   );
-  const walletHash = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new Uint8Array(wallet.publicKey))
-  );
-  const storageKeyOf = (txId: string) => `msigNonce:${hex.encode(walletHash)}:${txId}`;
+  const walletHash = await walletHashOf(wallet.publicKey);
+  const storageKeyOf = (txId: string) => storageKeyFor(walletHash, txId);
 
   /** Reads storage every time: the core's read-back must see what storage holds. */
   async function read(txId: string) {

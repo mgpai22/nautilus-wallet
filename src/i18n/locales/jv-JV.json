@@ -486,6 +486,7 @@
       "working": "Working",
       "done": "Done",
       "runFailed": "This transaction could not be committed.",
+      "signFailed": "This transaction could not be signed.",
       "failed": "Failed"
     }
   },
