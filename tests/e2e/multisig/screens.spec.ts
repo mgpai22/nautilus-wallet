@@ -1,8 +1,9 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
-import { WALLET_A } from "../fixtures/wallets";
+import { RECIPIENT_ADDRESS, TEST_TOKEN, WALLET_A } from "../fixtures/wallets";
 import { clickToClose, connectDapp } from "../pages/connector";
-import { DECLINE, makeItems, reviewRows, runMultisig, withReviewWindow } from "./helpers";
+import { DECLINE, reviewRows, runMultisig, withReviewWindow } from "./helpers";
+import { makeRequest, makeWallet, publicKeyOf } from "./requests";
 
 /** The size the background opens the connector window at (`src/common/uiHelpers.ts`). */
 const WINDOW_SIZE = { width: 365, height: 660 };
@@ -37,16 +38,16 @@ type Stop = { name: string; ring: boolean };
 /**
  * Presses Tab from the top of the window until the focus leaves or comes round, and reports
  * for each stop whether its focus ring differs from the same element without focus. `capture`
- * runs on every stop, to put its state on file.
+ * runs on every stop, to put its state on file. Twenty reviews hold many stops.
  */
-async function walkTabStops(win: Page, capture: (name: string) => Promise<unknown>) {
+async function walkTabStops(win: Page, capture: (name: string, stop: number) => unknown) {
   await win.bringToFront();
   await win.evaluate(() => {
     (document.activeElement as HTMLElement).blur();
     Object.assign(window, { tabSnaps: [] });
   });
 
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 300; i++) {
     await win.keyboard.press("Tab");
     const name = await win.evaluate(async () => {
       const snaps = (window as unknown as { tabSnaps: { el: Element; look: string }[] }).tabSnaps;
@@ -64,7 +65,7 @@ async function walkTabStops(win: Page, capture: (name: string) => Promise<unknow
     });
 
     if (name === undefined) break;
-    await capture(name);
+    await capture(name, i);
   }
 
   return win.evaluate(async (): Promise<Stop[]> => {
@@ -164,26 +165,64 @@ function contrastFailures(win: Page) {
   });
 }
 
+/**
+ * `count` requests of a 2 of 3 wallet whose signer is Alice, each with a payment that carries a
+ * token, so a review is as tall as it gets. Each item reads on its own.
+ */
+async function readableItems(count: number) {
+  const signer = await publicKeyOf(WALLET_A, 0);
+  const built = Array.from({ length: count }, () =>
+    makeRequest(makeWallet(2, 3, signer), 1, {
+      address: RECIPIENT_ADDRESS,
+      value: 123_456_789n,
+      tokens: [{ id: TEST_TOKEN.tokenId, amount: 12_345n }]
+    })
+  );
+
+  return {
+    items: built.map(({ csr }, i) => ({ id: `payroll-${i + 1}`, request: csr })),
+    txIds: built.map(({ txId }) => txId)
+  };
+}
+
 test.describe("multisig review window screens", () => {
-  test.beforeEach(async ({ popup, context, dapp }) => {
+  test.beforeEach(async ({ popup, context, dapp, chain }) => {
+    chain.addToken(TEST_TOKEN);
     await popup.importWallet(WALLET_A);
     await connectDapp(context, dapp, WALLET_A.name);
   });
 
-  for (const count of [1, 20]) {
-    const label = `${count}-item${count === 1 ? "" : "s"}`;
+  const cases = [
+    { label: "1-item", readable: 1, refused: 0 },
+    { label: "20-items", readable: 20, refused: 0 },
+    { label: "refused-item", readable: 1, refused: 1 }
+  ];
 
-    // At 365 by 660 in both themes, the list never pushes Decline out of the window or scrolls the
-    // page sideways, every control has a focus ring, and muted text meets AA in the dark theme.
+  for (const { label, readable, refused } of cases) {
+    const count = readable + refused;
+
+    // At 365 by 660 in both themes, a review of one, twenty or a refused item never pushes Decline
+    // out of the window or scrolls the page sideways, every control has a focus ring, and muted
+    // text meets AA in the dark theme.
     test(`${label} fit the window with focus rings and AA contrast in both themes`, async ({
       context,
       dapp
     }, testInfo) => {
+      test.setTimeout(180_000);
+      const { items, txIds } = await readableItems(readable);
+      if (refused) items.push({ id: "payroll-refused", request: "this is not a request" });
+
       const { win, result } = await withReviewWindow(context, () =>
-        runMultisig(dapp, "commit", makeItems(count, "payroll"))
+        runMultisig(dapp, "commit", items)
       );
       await win.setViewportSize(WINDOW_SIZE);
       await expect(reviewRows(win)).toHaveCount(count);
+      // every item is read: a transaction id for the readable ones, the core's reason for the other
+      for (const [i, txId] of txIds.entries()) {
+        await expect(reviewRows(win).nth(i)).toContainText(txId);
+      }
+      if (refused) await expect(reviewRows(win).last()).toContainText(/C5: /);
+      await expect(win.getByText(/not read/i)).toHaveCount(0);
       const decline = win.getByRole("button", { name: DECLINE });
 
       for (const scheme of SCHEMES) {
@@ -207,14 +246,25 @@ test.describe("multisig review window screens", () => {
           expect(await rowsScroll(win), `${scheme}: the rows scroll`).toBe(true);
           await reviewRows(win).last().scrollIntoViewIfNeeded();
           await expect(reviewRows(win).last()).toBeInViewport();
+          // the refused row on its own, so the badge and the reason are in a capture
+          if (refused) {
+            await reviewRows(win)
+              .last()
+              .screenshot({
+                path: testInfo.outputPath(`multisig-review-${label}-${scheme}-refused-row.png`)
+              });
+          }
           await expect(decline).toBeInViewport({ ratio: 1 });
           await reviewRows(win).first().scrollIntoViewIfNeeded();
         }
 
         expect(await contrastFailures(win), `${scheme}: text below AA`).toEqual([]);
 
-        const stops = await walkTabStops(win, (name) =>
-          shot(`focus-${name.toLowerCase().replace(/\W+/g, "-")}`)
+        // the first stops and Decline are on file: a stop for each of twenty reviews would take minutes
+        const stops = await walkTabStops(win, (name, stop) =>
+          stop < 4 || name === DECLINE
+            ? shot(`focus-${stop}-${name.toLowerCase().replace(/\W+/g, "-")}`)
+            : undefined
         );
         expect(
           stops.map((s) => s.name),

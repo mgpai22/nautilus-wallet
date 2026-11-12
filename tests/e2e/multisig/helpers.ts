@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, type BrowserContext, type Page } from "@playwright/test";
+import { ErgoHDKey } from "@fleet-sdk/wallet";
+import { WALLET_A } from "../fixtures/wallets";
 import { DAPP_ORIGIN } from "../mocks/services";
 import { invoke, type Outcome } from "../pages/connector";
+import { makeRequest, makeWallet } from "./requests";
 
 /** The wallet's English catalog: the window runs in `en-US` (the browser locale of the fixtures). */
 const catalog = JSON.parse(
@@ -230,15 +233,18 @@ export function runMultisig(
   );
 }
 
+/** Alice's key at index 0: the signer of every request `makeItems` builds, and the wallet each spec connects. */
+const ALICE = ErgoHDKey.fromMnemonicSync(WALLET_A.mnemonic).deriveChild(0).publicKey;
+
 /**
- * `count` valid items. The ids and the request texts are words that must never show on the
- * review screen: the page chooses them. A request text passes the item checks, but no core
- * reads it.
+ * `count` items that the review reads: each a 2 of 3 request with Alice as one signer, due for
+ * a commitment. The ids are words that must never show on the review screen: the page chooses
+ * them. Every call makes new requests.
  */
-export function makeItems(count: number, tag: string, requestTag = tag) {
+export function makeItems(count: number, tag: string) {
   return Array.from({ length: count }, (_, i) => ({
     id: `${tag}-${i + 1}`,
-    request: `{"MSR":"${requestTag}-${i + 1}"}`
+    request: makeRequest(makeWallet(2, 3, ALICE), 1).csr
   }));
 }
 
@@ -419,4 +425,15 @@ export async function openContentScriptChannel(
         `globalThis.msigChannel.send(${JSON.stringify(messageID)}, ${JSON.stringify(data)})`
       ) as Promise<ChannelReply>
   };
+}
+
+/**
+ * A raw amount as the window shows it: scaled by `decimals`, with no trailing zeros. The
+ * amounts of these tests stay below 1,000, so the wallet's digit grouping never applies.
+ */
+export function decimalText(raw: bigint, decimals: number): string {
+  const digits = raw.toString().padStart(decimals + 1, "0");
+  const fraction = digits.slice(digits.length - decimals).replace(/0+$/, "");
+  const whole = digits.slice(0, digits.length - decimals);
+  return fraction ? `${whole}.${fraction}` : whole;
 }

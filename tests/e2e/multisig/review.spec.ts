@@ -27,7 +27,7 @@ test.describe("multisig run in the review window", () => {
     context,
     dapp
   }) => {
-    const items = makeItems(3, "payroll", "wire");
+    const items = makeItems(3, "payroll");
     const headers: Record<string, string> = {};
 
     for (const method of METHODS) {
@@ -40,7 +40,6 @@ test.describe("multisig run in the review window", () => {
       await expect(rows).toHaveCount(3);
       for (const [i, row] of (await rows.all()).entries()) {
         await expect(row).toContainText(String(i + 1));
-        await expect(row).toContainText(/not read/i);
       }
 
       const header = await textOutsideRows(win);
@@ -50,10 +49,8 @@ test.describe("multisig run in the review window", () => {
       expect(header).not.toMatch(method === "commit" ? /\bsign/i : /commit/i);
       expect(header).toMatch(method === "commit" ? /commit/i : /\bsign/i);
 
-      // the page chooses an id and a request text: none of it is a fact the signer can rely on
-      const everything = await win.locator("body").innerText();
-      expect(everything).not.toContain("payroll");
-      expect(everything).not.toContain("wire");
+      // the page chooses an id: it is no fact the signer can rely on
+      expect(await win.locator("body").innerText()).not.toContain("payroll");
 
       // before the core no item can be approved, so a button that approves would approve nothing
       await expect(win.getByRole("button")).toHaveCount(1);
@@ -87,7 +84,10 @@ test.describe("multisig run in the review window", () => {
   // closed." and never leaves the page waiting.
   test("a closed window answers every item as declined", async ({ context, dapp }) => {
     const items = makeItems(3, "payroll");
-    const { win, result } = await withReviewWindow(context, () => runMultisig(dapp, "sign", items));
+    // the items are due for a commitment: in a sign run the review would stop them as not due
+    const { win, result } = await withReviewWindow(context, () =>
+      runMultisig(dapp, "commit", items)
+    );
     await expect(reviewRows(win)).toHaveCount(3);
 
     await win.close({ runBeforeUnload: true });
@@ -97,7 +97,7 @@ test.describe("multisig run in the review window", () => {
 
   // A run at the limits passes every hop: a hop that dies on a 40 MB message, or an off-by-one that
   // refuses a run at the limits, fails here. The refusal tests send runs one past each limit only.
-  test("a run at every limit reaches the window and is declined with its ids", async ({
+  test("a run at every limit reaches the window and every item is answered with its id", async ({
     context,
     dapp
   }) => {
@@ -123,7 +123,16 @@ test.describe("multisig run in the review window", () => {
     await expect(reviewRows(win)).toHaveCount(20);
     await clickToClose(win.getByRole("button", { name: DECLINE }));
 
-    expect(await result).toEqual({ ok: true, value: declined(ids.map((id) => ({ id }))) });
+    // none of the 20 texts is a request: each item is stopped with the core's reason
+    expect(await result).toEqual({
+      ok: true,
+      value: ids.map((id) => ({
+        id,
+        ok: false,
+        code: "unsupported",
+        message: expect.stringMatching(/^C5: /)
+      }))
+    });
   });
 
   // Two runs with the same ids but other request texts must not share an answer, as a dedupe hash
@@ -134,7 +143,7 @@ test.describe("multisig run in the review window", () => {
   }) => {
     const tracker = trackWindows(context);
     const items = makeItems(2, "payroll");
-    const other = makeItems(2, "payroll", "other");
+    const other = makeItems(2, "payroll");
 
     const { win, result: first } = await withReviewWindow(context, () =>
       runMultisig(dapp, "commit", items)

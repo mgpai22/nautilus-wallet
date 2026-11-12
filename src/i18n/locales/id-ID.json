@@ -465,7 +465,16 @@
       "transactions": "{count} transaction | {count} transactions",
       "item": "Transaction {position}",
       "notRead": "Not read",
-      "declined": "The signer declined this run."
+      "declined": "The signer declined this run.",
+      "refused": "Left out of the approval",
+      "readFailed": "This transaction could not be read.",
+      "transactionId": "Transaction ID",
+      "wallet": "Multi-signature wallet",
+      "threshold": "{k} of {n} signers",
+      "pays": "Pays",
+      "returns": "Returns to the multi-signature address",
+      "notDueCommit": "This transaction is not waiting for a commitment from this signer.",
+      "notDueSign": "This transaction is not waiting for a signature from this signer."
     }
   },
   "validation": {
