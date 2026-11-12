@@ -1,9 +1,11 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
+import { generateMnemonic } from "@fleet-sdk/wallet";
 import { expect, test } from "../fixtures/test";
 import { RECIPIENT_ADDRESS, TEST_TOKEN, WALLET_A } from "../fixtures/wallets";
 import { clickToClose, connectDapp } from "../pages/connector";
 import { DECLINE, reviewRows, runMultisig, withReviewWindow } from "./helpers";
 import { makeRequest, makeWallet, publicKeyOf } from "./requests";
+import { importButton, openSecretStep } from "./passphrase";
 
 /** The size the background opens the connector window at (`src/common/uiHelpers.ts`). */
 const WINDOW_SIZE = { width: 365, height: 660 };
@@ -36,16 +38,22 @@ function rowsScroll(win: Page) {
 type Stop = { name: string; ring: boolean };
 
 /**
- * Presses Tab from the top of the window until the focus leaves or comes round, and reports
- * for each stop whether its focus ring differs from the same element without focus. `capture`
- * runs on every stop, to put its state on file. Twenty reviews hold many stops.
+ * Presses Tab from the top of the window, or from `start`, until the focus leaves or comes
+ * round, and reports for each stop whether its focus ring differs from the same element without
+ * focus. A stop with no text is named by its id. `capture` runs on every stop, to put its state
+ * on file. Twenty reviews hold many stops.
  */
-async function walkTabStops(win: Page, capture: (name: string, stop: number) => unknown) {
+async function walkTabStops(
+  win: Page,
+  capture: (name: string, stop: number) => unknown,
+  start?: Locator
+) {
   await win.bringToFront();
   await win.evaluate(() => {
     (document.activeElement as HTMLElement).blur();
     Object.assign(window, { tabSnaps: [] });
   });
+  await start?.focus();
 
   for (let i = 0; i < 300; i++) {
     await win.keyboard.press("Tab");
@@ -59,7 +67,7 @@ async function walkTabStops(win: Page, capture: (name: string, stop: number) => 
       snaps.push({ el, look: `${style.outline}|${style.boxShadow}` });
       return (
         el.getAttribute("aria-label") ??
-        (el.matches("button, a, input") ? el.textContent?.trim() : "scroll area") ??
+        (el.matches("button, a, input") ? el.textContent?.trim() || el.id : "scroll area") ??
         ""
       );
     });
@@ -78,7 +86,7 @@ async function walkTabStops(win: Page, capture: (name: string, stop: number) => 
       return {
         name:
           el.getAttribute("aria-label") ??
-          (el.matches("button, a, input") ? el.textContent?.trim() : "scroll area") ??
+          (el.matches("button, a, input") ? el.textContent?.trim() || el.id : "scroll area") ??
           "",
         ring: look !== `${style.outline}|${style.boxShadow}`
       };
@@ -88,11 +96,12 @@ async function walkTabStops(win: Page, capture: (name: string, stop: number) => 
 
 /**
  * The text in the window that does not meet WCAG AA against its own background, the wallet
- * bar of upstream's shell left out. The check composites every background and opacity from the
- * element up, and reads colours through a canvas so that any CSS colour syntax resolves.
+ * bar of upstream's shell left out. `within` limits the check to the text inside matching
+ * elements. The check composites every background and opacity from the element up, and reads
+ * colours through a canvas so that any CSS colour syntax resolves.
  */
-function contrastFailures(win: Page) {
-  return win.evaluate(() => {
+function contrastFailures(win: Page, within?: string) {
+  return win.evaluate((within) => {
     type Rgba = [number, number, number, number];
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 1;
@@ -142,6 +151,7 @@ function contrastFailures(win: Page) {
         .join(" ")
         .trim();
       if (!text || root.firstElementChild?.contains(el) || !el.checkVisibility()) continue;
+      if (within && !el.closest(within)) continue;
       if (el.closest(":disabled, [aria-disabled=true]")) continue;
 
       const style = getComputedStyle(el);
@@ -162,7 +172,7 @@ function contrastFailures(win: Page) {
     }
 
     return failures;
-  });
+  }, within);
 }
 
 /**
@@ -280,4 +290,94 @@ test.describe("multisig review window screens", () => {
       await result;
     });
   }
+});
+
+/** The text the passphrase adds to the secret step: its labels, its hint and its messages. */
+const PASSPHRASE_TEXT =
+  "label[for=has-passphrase], label[for=passphrase], label[for=confirm-passphrase], [data-form-error]";
+
+test.describe("restore form passphrase screens", () => {
+  // On the restore form, the switch and the fields never push Import out of the popup or scroll it
+  // sideways, every control has a focus ring and a tab stop, and labels, hints and messages meet AA
+  // in the dark theme.
+  test("the secret step with 24 words fits the popup with focus rings and AA contrast in both themes", async ({
+    popup
+  }, testInfo) => {
+    test.setTimeout(240_000);
+    const page = popup.page;
+    await openSecretStep(popup, {
+      name: "Screens",
+      mnemonic: generateMnemonic(256),
+      password: "correct horse battery"
+    });
+    await expect(page.locator("form .grid input")).toHaveCount(24);
+
+    const states = [
+      { label: "off", fields: false, enter: async () => undefined },
+      { label: "on", fields: true, enter: () => popup.setSwitch("#has-passphrase", true) },
+      {
+        label: "mismatch",
+        fields: true,
+        enter: async () => {
+          await page.locator("#passphrase").fill("first entry");
+          await page.locator("#confirm-passphrase").fill("second entry");
+          await importButton(popup).click();
+          await expect(page.getByText("Passphrases don't match.")).toBeVisible();
+        }
+      }
+    ];
+
+    for (const { label, fields, enter } of states) {
+      await enter();
+
+      for (const scheme of SCHEMES) {
+        await page.emulateMedia({ colorScheme: scheme });
+        if (scheme === "dark") await expect(page.locator("html")).toHaveClass(/dark/);
+        else await expect(page.locator("html")).not.toHaveClass(/dark/);
+
+        const shot = (state: string) =>
+          page.screenshot({
+            path: testInfo.outputPath(`restore-passphrase-${label}-${scheme}-${state}.png`)
+          });
+        await shot("at-rest");
+
+        expect(
+          await pageOverflow(page),
+          `${label}, ${scheme}: the page scrolls sideways`
+        ).toMatchObject({
+          sideways: 0
+        });
+        await importButton(popup).scrollIntoViewIfNeeded();
+        await expect(importButton(popup)).toBeInViewport({ ratio: 1 });
+
+        await expect(page.locator(PASSPHRASE_TEXT).first()).toBeVisible();
+        expect(
+          await contrastFailures(page, PASSPHRASE_TEXT),
+          `${label}, ${scheme}: text below AA`
+        ).toEqual([]);
+
+        const stops = await walkTabStops(
+          page,
+          (name) => shot(`focus-${name.toLowerCase().replace(/\W+/g, "-").slice(0, 40)}`),
+          page.locator("form .grid input").last()
+        );
+        // the switch is named by its label and hint (aria-label), the fields by their ids
+        const names = stops.map((s) => s.name);
+        expect(
+          names.some((name) => name.startsWith("This wallet has a passphrase")),
+          `${label}, ${scheme}: the switch is a tab stop: ${names}`
+        ).toBe(true);
+        expect(names, `${label}, ${scheme}: tab stops`).toEqual(
+          expect.arrayContaining([
+            ...(fields ? ["passphrase", "confirm-passphrase"] : []),
+            "Import"
+          ])
+        );
+        expect(
+          stops.filter((s) => !s.ring),
+          `${label}, ${scheme}: stops without a focus ring`
+        ).toEqual([]);
+      }
+    }
+  });
 });

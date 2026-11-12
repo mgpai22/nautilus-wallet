@@ -304,7 +304,13 @@
       "selectSecretType": "Выберите тип секрета",
       "selectWalletType": "Выберите тип кошелька",
       "words": "Фраза восстановления из {count} слов",
-      "importing": "Импортируем ваш кошелек..."
+      "importing": "Импортируем ваш кошелек...",
+      "hasPassphrase": "This wallet has a passphrase",
+      "hasPassphraseDesc": "Turn it on only for a wallet that was made with a BIP39 passphrase. A wrong passphrase opens a different, empty wallet.",
+      "passphrase": "Passphrase",
+      "confirmPassphrase": "Confirm passphrase",
+      "requiredPassphrase": "Passphrase is required.",
+      "passphrasesDontMatch": "Passphrases don't match."
     },
     "connect": {
       "confirmXPubExport": "Подтвердите экспорт расширенного публичного ключа",
@@ -323,7 +329,8 @@
       "showRecoveryPhrase": "Показать фразу восстановления",
       "success": "Резервная копия фразы восстановления создана",
       "failed": "Не удалось получить фразу восстановления",
-      "saveFailed": "Не удалось сохранить статус резервной копии"
+      "saveFailed": "Не удалось сохранить статус резервной копии",
+      "passphraseNotShown": "This wallet also has a passphrase. It is not shown. You need both to restore the wallet."
     },
     "newPasswordRequired": "Пароль обязателен."
   },

@@ -9,7 +9,8 @@ const ROOT = resolve(import.meta.dirname, "../../..");
 const BANNED_FILES = [
   "src/chains/ergo/hdKey.ts",
   "src/chains/ergo/transaction/prover.ts",
-  "src/chains/ergo/signing.ts"
+  "src/chains/ergo/signing.ts",
+  "src/common/walletSecret.ts"
 ];
 const BANNED_DIR = "src/extension/connector/multisig/";
 const BANNED_PACKAGE = "@ergo-msig/core";

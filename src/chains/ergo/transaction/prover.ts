@@ -22,6 +22,7 @@ import {
 } from "ergo-lib-wasm-browser";
 import { BoxCandidate, ErgoLedgerApp, Network, Token, UnsignedBox } from "ledger-ergo-js";
 import { DERIVATION_PATH, MAINNET } from "@/constants/ergo";
+import { unpackSecret } from "@/common/walletSecret";
 import { walletsDbService } from "@/database/walletsDbService";
 import { addressFromErgoTree } from "../addresses";
 import HdKey, { IndexedAddress } from "../hdKey";
@@ -297,5 +298,8 @@ function mapLedgerOutputs(tx: UnsignedTransaction) {
 
 /** @param password leave out to use the unlock session. */
 export async function getPrivateDeriver(walletId: number, password?: string): Promise<HdKey> {
-  return await HdKey.fromMnemonic(await walletsDbService.getSigningSecret(walletId, password));
+  const { mnemonic, passphrase } = unpackSecret(
+    await walletsDbService.getSigningSecret(walletId, password)
+  );
+  return await HdKey.fromMnemonic(mnemonic, passphrase);
 }

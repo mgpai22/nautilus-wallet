@@ -23,6 +23,7 @@ import { useToast } from "@/components/ui/toast";
 import { PasswordError } from "@/common/errors";
 import { log } from "@/common/logger";
 import { extractErrorMessage, unsafeDistinctRand } from "@/common/utils";
+import { unpackSecret } from "@/common/walletSecret";
 import { usePasswordKind, usePasswordTexts } from "@/composables/usePasswordPrompt";
 import { walletsDbService } from "@/database/walletsDbService";
 import Mnemonic from "./Mnemonic.vue";
@@ -44,6 +45,7 @@ const { kind: passwordKind, reload: reloadPasswordKind } = usePasswordKind(walle
 const passwordTexts = usePasswordTexts(() => wallet.name);
 const password = ref("");
 const mnemonicWords = ref<string[]>([]);
+const hasPassphrase = ref(false);
 const mnemonicWordsConfirm = ref<string[]>([]);
 const editableIndexes = ref<number[]>([]);
 
@@ -131,7 +133,9 @@ async function unlock() {
   try {
     loading.value = true;
     const secret = await walletsDbService.getSecret(walletId.value, password.value);
-    mnemonicWords.value = secret.trim().split(/\s+/);
+    const { mnemonic, passphrase } = unpackSecret(secret);
+    mnemonicWords.value = mnemonic.trim().split(/\s+/);
+    hasPassphrase.value = passphrase !== "";
     password.value = "";
     passwordRules.$reset();
     step.value = 2;
@@ -175,6 +179,7 @@ function reset() {
   step.value = 1;
   password.value = "";
   mnemonicWords.value = [];
+  hasPassphrase.value = false;
   mnemonicWordsConfirm.value = [];
   editableIndexes.value = [];
   passwordRules.$reset();
@@ -232,6 +237,9 @@ defineExpose({ open: () => setOpened(true), close: () => setOpened(false) });
               class="self-end"
             />
             <Mnemonic :words="mnemonicWords" />
+            <p v-if="hasPassphrase" class="text-muted-foreground text-xs">
+              {{ t("wallet.backup.passphraseNotShown") }}
+            </p>
           </div>
         </template>
 

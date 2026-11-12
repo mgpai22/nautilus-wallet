@@ -24,8 +24,8 @@ export default class HdKey {
     return this;
   }
 
-  public static async fromMnemonic(mnemonic: string): Promise<HdKey> {
-    return new this(await ErgoHDKey.fromMnemonic(mnemonic));
+  public static async fromMnemonic(mnemonic: string, passphrase = ""): Promise<HdKey> {
+    return new this(await ErgoHDKey.fromMnemonic(mnemonic, { passphrase }));
   }
 
   public static fromPublicKey(key: PublicKeyOptions, path?: string): HdKey {

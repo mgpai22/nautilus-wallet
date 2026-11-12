@@ -305,7 +305,13 @@
       "selectSecretType": "Pilih jenis rahasia",
       "selectWalletType": "Pilih jenis dompet",
       "words": "{count} kata frasa pemulihan",
-      "importing": "Mengimpor dompet milik Anda..."
+      "importing": "Mengimpor dompet milik Anda...",
+      "hasPassphrase": "This wallet has a passphrase",
+      "hasPassphraseDesc": "Turn it on only for a wallet that was made with a BIP39 passphrase. A wrong passphrase opens a different, empty wallet.",
+      "passphrase": "Passphrase",
+      "confirmPassphrase": "Confirm passphrase",
+      "requiredPassphrase": "Passphrase is required.",
+      "passphrasesDontMatch": "Passphrases don't match."
     },
     "connect": {
       "confirmXPubExport": "Konfirmasi ekspor Kunci Publik yang Diperluas",
@@ -324,7 +330,8 @@
       "showRecoveryPhrase": "Tampilkan frasa pemulihan",
       "success": "Frasa pemulihan telah dicadangkan",
       "failed": "Gagal mengambil frasa pemulihan",
-      "saveFailed": "Gagal menyimpan status pencadangan"
+      "saveFailed": "Gagal menyimpan status pencadangan",
+      "passphraseNotShown": "This wallet also has a passphrase. It is not shown. You need both to restore the wallet."
     },
     "newPasswordRequired": "Kata sandi wajib diisi."
   },

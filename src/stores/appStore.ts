@@ -9,6 +9,7 @@ import HdKey from "@/chains/ergo/hdKey";
 import { graphQLService } from "@/chains/ergo/services/graphQlService";
 import { log } from "@/common/logger";
 import { hdKeyPool } from "@/common/objectPool";
+import { packSecret } from "@/common/walletSecret";
 import { useWebExtStorage } from "@/composables/useWebExtStorage";
 import { MAINNET } from "@/constants/ergo";
 import { UTXO_CHECK_INTERVAL } from "@/constants/intervals";
@@ -41,6 +42,8 @@ type StandardWallet = {
   name: string;
   type: "standard";
   mnemonic: string;
+  /** The BIP39 passphrase. Leave out for a wallet with none. */
+  passphrase?: string;
   /** Leave out for the master password to use the unlock session. */
   password?: string;
   passwordKind: PasswordKind;
@@ -130,7 +133,7 @@ export const useAppStore = defineStore("app", () => {
   async function putWallet(data: StandardWallet | ReadOnlyWallet): Promise<number> {
     const key =
       data.type === "standard"
-        ? await HdKey.fromMnemonic(data.mnemonic)
+        ? await HdKey.fromMnemonic(data.mnemonic, data.passphrase)
         : HdKey.fromPublicKey(data.extendedPublicKey);
 
     hdKeyPool.alloc(hex.encode(key.publicKey), key.neutered());
@@ -152,7 +155,11 @@ export const useAppStore = defineStore("app", () => {
     const walletId = await walletsDbService.put(
       dbObj,
       data.type === "standard"
-        ? { value: data.mnemonic, password: data.password, by: data.passwordKind }
+        ? {
+            value: packSecret(data.mnemonic, data.passphrase),
+            password: data.password,
+            by: data.passwordKind
+          }
         : undefined
     );
     await loadWallets();

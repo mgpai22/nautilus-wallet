@@ -304,7 +304,13 @@
       "selectSecretType": "选择密钥类型",
       "selectWalletType": "选择钱包类型",
       "words": "{count} 个单词恢复短语",
-      "importing": "正在导入您的钱包..."
+      "importing": "正在导入您的钱包...",
+      "hasPassphrase": "This wallet has a passphrase",
+      "hasPassphraseDesc": "Turn it on only for a wallet that was made with a BIP39 passphrase. A wrong passphrase opens a different, empty wallet.",
+      "passphrase": "Passphrase",
+      "confirmPassphrase": "Confirm passphrase",
+      "requiredPassphrase": "Passphrase is required.",
+      "passphrasesDontMatch": "Passphrases don't match."
     },
     "connect": {
       "confirmXPubExport": "确认导出扩展公钥",
@@ -323,7 +329,8 @@
       "showRecoveryPhrase": "显示恢复短语",
       "success": "恢复短语已备份",
       "failed": "无法获取恢复短语",
-      "saveFailed": "无法保存备份状态"
+      "saveFailed": "无法保存备份状态",
+      "passphraseNotShown": "This wallet also has a passphrase. It is not shown. You need both to restore the wallet."
     },
     "newPasswordRequired": "密码为必填项。"
   },

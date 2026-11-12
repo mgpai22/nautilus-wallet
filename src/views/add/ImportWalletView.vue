@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { english } from "@fleet-sdk/wallet/wordlists";
 import { useRegle } from "@regle/core";
-import { required, withMessage } from "@regle/rules";
+import { required, withMessage, withParams } from "@regle/rules";
 import { FingerprintIcon, KeyRoundIcon, Loader2Icon, LockKeyholeIcon } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
@@ -35,6 +35,7 @@ import {
   StepTitle,
   WalletPasswordFields
 } from "./components";
+import PassphraseFields from "./components/PassphraseFields.vue";
 
 const SUPPORTED_MNEMONIC_LENGTHS = new Set([12, 15, 18, 21, 24]);
 
@@ -58,6 +59,9 @@ const wordsCountStr = computed({
 });
 
 const xpk = ref("");
+const hasPassphrase = ref(false);
+const passphrase = ref("");
+const confirmPassphrase = ref("");
 
 const mnemonicPhrase = computed(() => mnemonicWords.value.join(" "));
 const isReadonly = computed(() => walletType.value === "readonly");
@@ -120,6 +124,29 @@ const { r$: mnemonicRules } = useRegle(
   { autoDirty: false }
 );
 
+// rules of this view: `required` trims, and a passphrase of white space is a legal one
+const { r$: passphraseRules } = useRegle(
+  { passphrase, confirmPassphrase },
+  {
+    passphrase: {
+      filled: withMessage(
+        withParams((value, active) => !active || String(value).length > 0, [hasPassphrase]),
+        () => t("wallet.import.requiredPassphrase")
+      )
+    },
+    confirmPassphrase: {
+      matches: withMessage(
+        withParams(
+          (value, first, active) => !active || value === first,
+          [passphrase, hasPassphrase]
+        ),
+        () => t("wallet.import.passphrasesDontMatch")
+      )
+    }
+  },
+  { autoDirty: false }
+);
+
 onMounted(() => {
   app.viewTitle = t("wallet.index.import");
 });
@@ -154,6 +181,8 @@ async function next() {
   } else {
     const { valid } = await mnemonicRules.$validate();
     if (!valid) return;
+
+    if (!(await passphraseRules.$validate()).valid) return;
   }
 
   try {
@@ -174,8 +203,11 @@ async function next() {
           name: walletName.value,
           type: "standard",
           mnemonic: mnemonicWords.value.join(" "),
+          // a switch that is off restores with none, whatever the fields hold
+          passphrase: hasPassphrase.value ? passphrase.value : "",
           ...credentials
         });
+    passphrase.value = confirmPassphrase.value = "";
 
     await wallet.load(walletId, { syncInBackground: false });
     router.push({ name: "assets" });
@@ -332,6 +364,14 @@ const current = computed(() => steps.value[step.value - 1].key);
           <FormField :validation="mnemonicRules.mnemonicPhrase">
             <Mnemonic :words="mnemonicWords" editable />
           </FormField>
+
+          <PassphraseFields
+            v-model:enabled="hasPassphrase"
+            v-model:passphrase="passphrase"
+            v-model:confirm-passphrase="confirmPassphrase"
+            :rules="passphraseRules"
+            :disabled="loading"
+          />
         </template>
       </template>
     </Form>

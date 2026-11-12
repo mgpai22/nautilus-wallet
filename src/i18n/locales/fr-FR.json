@@ -304,7 +304,13 @@
       "selectSecretType": "Sélectionnez le type de secret",
       "selectWalletType": "Sélectionnez le type de portefeuille",
       "words": "Phrase de récupération de {count} mots",
-      "importing": "Importation de votre portefeuille..."
+      "importing": "Importation de votre portefeuille...",
+      "hasPassphrase": "This wallet has a passphrase",
+      "hasPassphraseDesc": "Turn it on only for a wallet that was made with a BIP39 passphrase. A wrong passphrase opens a different, empty wallet.",
+      "passphrase": "Passphrase",
+      "confirmPassphrase": "Confirm passphrase",
+      "requiredPassphrase": "Passphrase is required.",
+      "passphrasesDontMatch": "Passphrases don't match."
     },
     "connect": {
       "confirmXPubExport": "Confirmer l'exportation de la clé publique étendue",
@@ -323,7 +329,8 @@
       "showRecoveryPhrase": "Afficher la phrase de récupération",
       "success": "Phrase de récupération sauvegardée",
       "failed": "Impossible de récupérer la phrase de récupération",
-      "saveFailed": "Impossible d'enregistrer l'état de la sauvegarde"
+      "saveFailed": "Impossible d'enregistrer l'état de la sauvegarde",
+      "passphraseNotShown": "This wallet also has a passphrase. It is not shown. You need both to restore the wallet."
     },
     "newPasswordRequired": "Le mot de passe est requis."
   },
