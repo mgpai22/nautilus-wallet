@@ -1,11 +1,14 @@
 import { allowWindowMessaging, onMessage, sendMessage } from "webext-bridge/content-script";
 import { EXT_ENTRY_ROOT } from "@/constants/extension";
+import { APIErrorCode } from "@/types/connector";
 import {
   buildNamespaceFor,
+  error as errorResult,
   ExternalEvent,
   ExternalRequest,
   InternalRequest
 } from "../connector/rpc/protocol";
+import { readItems } from "../connector/rpc/multisigItems";
 
 const CONSOLE_PREFIX = "[Nautilus]";
 const BACKGROUND = "background";
@@ -169,5 +172,18 @@ function dropForeignPortOffers() {
       { ...pick(data, ["transaction", "indexes"]), payload },
       BACKGROUND
     );
+  });
+
+  // multisig runs: the item checks run here first, so a bad run never reaches the runtime port
+  onMessage(ExternalRequest.MultisigCommit, async ({ data }) => {
+    const items = readItems(pick(data, ["items"]).items);
+    if (typeof items === "string") return errorResult(APIErrorCode.InvalidRequest, items);
+    return await sendMessage(InternalRequest.MultisigCommit, { items, payload }, BACKGROUND);
+  });
+
+  onMessage(ExternalRequest.MultisigSign, async ({ data }) => {
+    const items = readItems(pick(data, ["items"]).items);
+    if (typeof items === "string") return errorResult(APIErrorCode.InvalidRequest, items);
+    return await sendMessage(InternalRequest.MultisigSign, { items, payload }, BACKGROUND);
   });
 })();

@@ -15,6 +15,8 @@ export const enum ExternalRequest {
   SignTxInputs = "ext:sign-tx-input",
   SignData = "ext:sign-data",
   Auth = "ext:auth",
+  MultisigCommit = "ext:multisig-commit",
+  MultisigSign = "ext:multisig-sign",
   SubmitTransaction = "ext:submit-transaction"
 }
 
@@ -31,6 +33,8 @@ export const enum InternalRequest {
   SignTxInputs = "int:sign-tx-input",
   SignData = "int:sign-data",
   Auth = "int:auth",
+  MultisigCommit = "int:multisig-commit",
+  MultisigSign = "int:multisig-sign",
   SubmitTransaction = "int:submit-transaction"
 }
 

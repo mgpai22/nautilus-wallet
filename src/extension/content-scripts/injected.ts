@@ -3,6 +3,7 @@ import { SelectionTarget } from "@nautilus-js/eip12-types";
 import type { JsonValue } from "type-fest";
 import { sendMessage, setNamespace } from "webext-bridge/window";
 import { APIErrorCode } from "@/types/connector";
+import type { MultisigItem } from "@/types/d.ts/webext-rpc";
 import {
   buildNamespaceFor,
   ExternalEvent,
@@ -66,6 +67,14 @@ class NautilusAuthApi {
 
 class NautilusErgoApi {
   static instance: NautilusErgoApi;
+  // an own, frozen property: a page script cannot shadow it through the prototype
+  multisig = Object.freeze({
+    version: 1,
+    commit: async (items: MultisigItem[]) =>
+      handle(await sendMessage(ExternalRequest.MultisigCommit, { items }, CONTENT_SCRIPT)),
+    sign: async (items: MultisigItem[]) =>
+      handle(await sendMessage(ExternalRequest.MultisigSign, { items }, CONTENT_SCRIPT))
+  });
 
   constructor() {
     if (NautilusErgoApi.instance) {

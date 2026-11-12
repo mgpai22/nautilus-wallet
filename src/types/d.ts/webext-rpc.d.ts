@@ -38,6 +38,13 @@ type SignTxInputsResult = Result<SignedInput[]>;
 type SubmitTxArgs = { transaction: SignedTransaction };
 type SubmitTxResult = Result<string>;
 
+type MultisigItem = { id: string; request: string };
+type MultisigArgs = { items: MultisigItem[] };
+type MultisigEntry =
+  | { id: string; ok: true; request: string }
+  | { id: string; ok: false; code: "declined" | "refused" | "unsupported"; message: string };
+type MultisigResult = Result<MultisigEntry[]>;
+
 declare module "webext-bridge" {
   export interface ProtocolMap {
     [ExternalRequest.Connect]: WithReturn<undefined, boolean>;
@@ -53,6 +60,8 @@ declare module "webext-bridge" {
     [ExternalRequest.SignTx]: WithReturn<SignTxArgs, SignTxResult>;
     [ExternalRequest.SignTxInputs]: WithReturn<SignTxInputsArgs, SignTxInputsResult>;
     [ExternalRequest.SubmitTransaction]: WithReturn<SubmitTxArgs, SubmitTxResult>;
+    [ExternalRequest.MultisigCommit]: WithReturn<MultisigArgs, MultisigResult>;
+    [ExternalRequest.MultisigSign]: WithReturn<MultisigArgs, MultisigResult>;
 
     [InternalRequest.Connect]: WithReturn<WithPayload, boolean>;
     [InternalRequest.CheckConnection]: WithReturn<WithPayload, boolean>;
@@ -67,6 +76,8 @@ declare module "webext-bridge" {
     [InternalRequest.SignTx]: WithReturn<WithPayload<SignTxArgs>, SignTxResult>;
     [InternalRequest.SignTxInputs]: WithReturn<WithPayload<SignTxInputsArgs>, SignTxInputsResult>;
     [InternalRequest.SubmitTransaction]: WithReturn<WithPayload<SubmitTxArgs>, SubmitTxResult>;
+    [InternalRequest.MultisigCommit]: WithReturn<WithPayload<MultisigArgs>, MultisigResult>;
+    [InternalRequest.MultisigSign]: WithReturn<WithPayload<MultisigArgs>, MultisigResult>;
 
     [InternalEvent.Loaded]: undefined;
     [InternalEvent.UpdatedBackendUrl]: string;
