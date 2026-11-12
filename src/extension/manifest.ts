@@ -46,7 +46,7 @@ export function buildManifest(
 ): Manifest.WebExtensionManifest {
   return {
     manifest_version: 3,
-    name: buildTitle(mode, network),
+    name: `${buildTitle(mode, network)} (multisig fork)`,
     short_name: "Nautilus",
     description: buildDescription(mode, network),
     default_locale: "en",
@@ -64,7 +64,7 @@ export function buildManifest(
     ],
     action: {
       default_popup: r("popup/index.html"),
-      default_title: "Nautilus Wallet"
+      default_title: "Nautilus Wallet (multisig fork)"
     },
     web_accessible_resources: [
       {
@@ -93,12 +93,12 @@ export function buildManifest(
         {
           background: { scripts: [r("background/background.ts")] },
           browser_specific_settings: {
-            gecko: { id: "{35bc2a66-11b8-410d-8c0e-463db6744795}" }
+            gecko: { id: "{aa93451c-88f8-41e6-9b07-830a9a4d5678}" }
           },
           sidebar_action: {
             default_panel: r("popup/index.html"),
             default_icon: buildIcons(mode, network),
-            default_title: "Nautilus Wallet",
+            default_title: "Nautilus Wallet (multisig fork)",
             open_at_install: false
           }
         })
