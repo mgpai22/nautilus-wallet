@@ -486,7 +486,16 @@
       "done": "Done",
       "runFailed": "This transaction could not be committed.",
       "signFailed": "This transaction could not be signed.",
-      "failed": "Failed"
+      "failed": "Failed",
+      "records": "Multi-signature records",
+      "recordsDesc": "Records this wallet keeps for multi-signature transactions in progress.",
+      "recordsEmpty": "No records stored for this wallet.",
+      "inputs": "{count} input | {count} inputs",
+      "removeRecord": "Remove record {txId}",
+      "removeRecordTitle": "Remove this record?",
+      "removeRecordDesc": "An open transaction whose record is removed can no longer be signed by this signer.",
+      "removeRecordFailed": "Failed to remove the record",
+      "removeWalletRecords": "Removing this wallet also deletes its multi-signature records. Restoring the wallet does not bring back the ability to sign the open transactions they belong to."
     }
   },
   "validation": {

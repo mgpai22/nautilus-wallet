@@ -19,6 +19,15 @@ import {
 import { cosignerCommit } from "./cosigners";
 import { cosignerColumns, makeRequest, makeWallet, publicKeyOf } from "./requests";
 import { importButton, openSecretStep } from "./passphrase";
+import {
+  commitRecords,
+  EMPTY_TEXT,
+  openWalletSettings,
+  recordsRegion,
+  REGION_NAME,
+  rowRemove,
+  WARNING
+} from "./records";
 
 /** The size the background opens the connector window at (`src/common/uiHelpers.ts`). */
 const WINDOW_SIZE = { width: 365, height: 660 };
@@ -178,7 +187,8 @@ function contrastFailures(win: Page, within?: string) {
     const root = document.querySelector("#app > div")!;
     const failures: { text: string; ratio: number }[] = [];
 
-    for (const el of root.querySelectorAll("*")) {
+    // a portal (a dialog) sits outside the app's root, so a named scope is searched in the body
+    for (const el of (within ? document.body : root).querySelectorAll("*")) {
       const text = [...el.childNodes]
         .filter((n) => n.nodeType === Node.TEXT_NODE)
         .map((n) => n.textContent?.trim())
@@ -620,5 +630,131 @@ test.describe("restore form passphrase screens", () => {
         ).toEqual([]);
       }
     }
+  });
+});
+
+type PopupScreen = {
+  /** The part of the page whose text is checked for contrast. */
+  scope: Locator;
+  /** Controls that must show whole in the popup. */
+  inView: Locator[];
+  /** Tab stops the page must offer, by the start of their name, and how many of each at least. */
+  stops: Record<string, number>;
+};
+
+/**
+ * The screen checks for one state of the settings in both themes, at the popup's size: a capture,
+ * no sideways scroll, the named controls whole in the popup, the text of `scope` at AA, and the
+ * keyboard stops. Every stop named in `stops` must show a focus ring. The settings of upstream
+ * hold more stops: they are not judged here.
+ */
+async function checkPopupScreen(
+  page: Page,
+  testInfo: TestInfo,
+  label: string,
+  screen: PopupScreen
+) {
+  const names = Object.keys(screen.stops);
+
+  for (const scheme of SCHEMES) {
+    await page.emulateMedia({ colorScheme: scheme });
+    if (scheme === "dark") await expect(page.locator("html")).toHaveClass(/dark/);
+    else await expect(page.locator("html")).not.toHaveClass(/dark/);
+    await settled(page);
+
+    const shot = (state: string) =>
+      page.screenshot({
+        path: testInfo.outputPath(`multisig-records-${label}-${scheme}-${state}.png`)
+      });
+    await shot("at-rest");
+
+    expect(
+      await pageOverflow(page),
+      `${label}, ${scheme}: the page scrolls sideways`
+    ).toMatchObject({
+      sideways: 0
+    });
+    for (const target of screen.inView) {
+      await target.scrollIntoViewIfNeeded();
+      await expect(target).toBeInViewport({ ratio: 1 });
+    }
+
+    await screen.scope.evaluate((el) => el.setAttribute("data-scope", ""));
+    expect(
+      await contrastFailures(page, "[data-scope]"),
+      `${label}, ${scheme}: text below AA`
+    ).toEqual([]);
+
+    if (names.length === 0) continue;
+    const stops = await walkTabStops(page, (name, stop) =>
+      names.some((n) => name.startsWith(n))
+        ? shot(`focus-${stop}-${name.toLowerCase().replace(/\W+/g, "-").slice(0, 30)}`)
+        : undefined
+    );
+    for (const [prefix, atLeast] of Object.entries(screen.stops)) {
+      expect(
+        stops.filter((s) => s.name.startsWith(prefix)).length,
+        `${label}, ${scheme}: tab stops named ${prefix}`
+      ).toBeGreaterThanOrEqual(atLeast);
+    }
+    expect(
+      stops.filter((s) => names.some((n) => s.name.startsWith(n)) && !s.ring),
+      `${label}, ${scheme}: stops without a focus ring`
+    ).toEqual([]);
+  }
+}
+
+test.describe("stored records screens", () => {
+  test.beforeEach(async ({ popup, context, dapp }) => {
+    await popup.importWallet(WALLET_A);
+    await connectDapp(context, dapp, WALLET_A.name);
+  });
+
+  // The records list and the warning dialog never scroll the popup sideways or push Remove or
+  // Cancel out of it, every control keeps its focus ring and tab stop, and muted text meets AA in
+  // the dark theme.
+  test("the empty list, three records and the warning fit the popup with focus rings and AA contrast in both themes", async ({
+    popup,
+    context,
+    dapp
+  }, testInfo) => {
+    test.setTimeout(240_000);
+    const page = popup.page;
+    await page.setViewportSize(WINDOW_SIZE);
+
+    await openWalletSettings(popup);
+    const region = recordsRegion(page);
+    await expect(region.getByText(EMPTY_TEXT)).toBeVisible();
+    await checkPopupScreen(page, testInfo, "empty", { scope: region, inView: [region], stops: {} });
+
+    await commitRecords(context, dapp, WALLET_A, [1, 2, 3]);
+    await page.reload();
+    await openWalletSettings(popup);
+    await expect(region.getByRole("listitem")).toHaveCount(3);
+    await expect(region.getByText(EMPTY_TEXT)).toHaveCount(0);
+    const removes = rowRemove(region);
+    await expect(removes).toHaveCount(3);
+    // the three rows' buttons and the wallet's own Remove
+    await checkPopupScreen(page, testInfo, "three", {
+      scope: region,
+      inView: [removes.nth(0), removes.nth(1), removes.nth(2)],
+      stops: { Remove: 4 }
+    });
+
+    await removes.first().click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText(WARNING);
+    await checkPopupScreen(page, testInfo, "warning", {
+      scope: dialog,
+      inView: [
+        dialog.getByRole("button", { name: "Cancel" }),
+        dialog.getByRole("button", { name: "Remove", exact: true })
+      ],
+      stops: { Cancel: 1, Remove: 1 }
+    });
+
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("region", { name: REGION_NAME })).toBeVisible();
   });
 });

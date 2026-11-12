@@ -156,6 +156,10 @@ describe("a wallet's keys follow its passphrase", () => {
       [madePassphrase(), madePassphrase()].map((p) => HdKey.fromMnemonic(MNEMONIC, p))
     );
     const txId = hex.encode(random(32));
+    // the store writes for a wallet that is stored: a and the wallet with no passphrase
+    const walletOf = (key: HdKey) => ({ publicKey: hex.encode(key.publicKey) });
+    local.set("wallet:1", walletOf(a));
+    local.set("wallet:2", walletOf(await HdKey.fromMnemonic(MNEMONIC)));
     const record = newRecord(txId);
     await (await openNonceStore(a)).put([record]);
     const stored = structuredClone([...local]);

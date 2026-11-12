@@ -1,6 +1,7 @@
 import { Refusal, type Binding, type NonceRecord, type NonceStore } from "@ergo-msig/core";
 import { hex } from "@fleet-sdk/crypto";
 import { storage } from "webextension-polyfill";
+import { walletsDbService } from "@/database/walletsDbService";
 
 /**
  * The nonce store of the connector window. The records of one transaction rest under one storage
@@ -63,6 +64,49 @@ export async function removeRecords(publicKey: Uint8Array, txId: string): Promis
   await navigator.locks.request(LOCK_NAME, () => storage.local.remove(storageKey));
 }
 
+/** What the settings list shows of a transaction's records: the clear part of the value. */
+export type RecordSummary = { txId: string; inputs: number; createdAt: number };
+
+/** The storage keys of every record of the wallet whose public key is given, with their values. */
+async function recordsOf(publicKey: Uint8Array) {
+  const prefix = storageKeyFor(await walletHashOf(publicKey), "");
+  const stored = await storage.local.get();
+  return {
+    prefix,
+    entries: Object.entries(stored).filter(([storageKey]) => storageKey.startsWith(prefix))
+  };
+}
+
+/**
+ * The transactions that have a record for the wallet, newest first, read from the clear part of
+ * each value. It decrypts nothing: the popup holds no key.
+ */
+export async function listRecords(publicKey: Uint8Array): Promise<RecordSummary[]> {
+  const { prefix, entries } = await recordsOf(publicKey);
+  return entries
+    .map(([storageKey, value]) => {
+      const { inputs, createdAt } = value as StoredValue;
+      return { txId: storageKey.slice(prefix.length), inputs, createdAt };
+    })
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/**
+ * Removes every record of the wallet whose public key is given, then runs `deleteWallet`, all
+ * under the lock of every write. A store of that wallet that is open already writes under the
+ * same lock and finds the wallet gone, so no write lands after the removal.
+ */
+export async function removeWalletRecords(
+  publicKey: Uint8Array,
+  deleteWallet: () => Promise<void>
+): Promise<void> {
+  await navigator.locks.request(LOCK_NAME, async () => {
+    const { entries } = await recordsOf(publicKey);
+    await storage.local.remove(entries.map(([storageKey]) => storageKey));
+    await deleteWallet();
+  });
+}
+
 /**
  * The store over `wallet`'s records. `wallet` is the deriver `getPrivateDeriver` gives, whose
  * keys are those of the change path.
@@ -88,6 +132,7 @@ export async function openNonceStore(wallet: {
     ["encrypt", "decrypt"]
   );
   const walletHash = await walletHashOf(wallet.publicKey);
+  const publicKeyHex = hex.encode(wallet.publicKey);
   const storageKeyOf = (txId: string) => storageKeyFor(walletHash, txId);
 
   /** Reads storage every time: the core's read-back must see what storage holds. */
@@ -107,6 +152,17 @@ export async function openNonceStore(wallet: {
       return { createdAt: value.createdAt, records };
     } catch {
       throw new Error("A stored nonce record of this transaction does not open.");
+    }
+  }
+
+  /**
+   * Called under the lock before a write: a wallet that was removed gets no record. The removal
+   * took the lock first, so a write that waited for it must not put the records back.
+   */
+  async function requireWallet() {
+    const stored = await walletsDbService.getAll();
+    if (!stored.some(({ publicKey }) => publicKey === publicKeyHex)) {
+      throw new Error("The wallet of this store is no longer stored.");
     }
   }
 
@@ -160,6 +216,7 @@ export async function openNonceStore(wallet: {
 
       // the read, the check and the write of every window run one at a time
       await navigator.locks.request(LOCK_NAME, async () => {
+        await requireWallet();
         const stored = await read(txId);
         const all = stored?.records ?? [];
         for (const record of records) {
@@ -182,6 +239,7 @@ export async function openNonceStore(wallet: {
 
     async bind(txId: string, bindings: readonly Binding[]) {
       await navigator.locks.request(LOCK_NAME, async () => {
+        await requireWallet();
         const stored = await read(txId);
         const records = stored?.records ?? [];
         let changed = false;

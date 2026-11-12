@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { useRegle } from "@regle/core";
 import { required, withMessage } from "@regle/rules";
 import { Loader2Icon } from "@lucide/vue";
+import { hex } from "@fleet-sdk/crypto";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/appStore";
 import { useWalletStore } from "@/stores/walletStore";
@@ -26,10 +27,12 @@ import { useToast } from "@/components/ui/toast";
 import { MnemonicBackupDialog } from "@/components/wallet";
 import { log } from "@/common/logger";
 import { extractErrorMessage } from "@/common/utils";
+import { listRecords } from "@/extension/connector/multisig/nonceStore";
 import { useProgrammaticDialog } from "@/composables/useProgrammaticDialog";
 import { usePasswordKind } from "@/composables/usePasswordPrompt";
 import PasswordDialog from "../PasswordDialog.vue";
 import ExportPublicKeyDialog from "./ExportPublicKeyDialog.vue";
+import MultisigRecords from "./MultisigRecords.vue";
 
 const wallet = useWalletStore();
 const app = useAppStore();
@@ -72,8 +75,25 @@ watch(
 const removeConfirmation = ref("");
 const canRemove = computed(() => removeConfirmation.value.trim() === wallet.name.trim());
 
+// the removal deletes the wallet's multi-signature records: the signer is told when it has any
+const hasRecords = ref(false);
+
+async function loadHasRecords() {
+  try {
+    hasRecords.value = (await listRecords(hex.decode(wallet.publicKey))).length > 0;
+  } catch (e) {
+    log.error(e);
+    // when the records cannot be read, the warning is shown: it is the safe side
+    hasRecords.value = true;
+  }
+}
+
 function resetRemoveConfirmation(open: boolean) {
-  if (open) removeConfirmation.value = "";
+  if (!open) return;
+
+  removeConfirmation.value = "";
+  hasRecords.value = false;
+  loadHasRecords();
 }
 
 const resyncing = ref(false);
@@ -195,6 +215,8 @@ const { r$ } = useRegle(
       </div>
     </Card>
 
+    <MultisigRecords v-if="isStandard" />
+
     <Card class="bg-destructive/15 flex flex-col gap-4 p-6">
       <div class="flex items-center justify-between gap-4">
         <Label class="flex flex-col items-start gap-1">
@@ -214,6 +236,9 @@ const { r$ } = useRegle(
             </DrawerHeader>
             <div v-once>
               {{ t("settings.wallet.walletRemoveConfirmationDesc") }}
+            </div>
+            <div v-if="hasRecords" class="font-medium">
+              {{ t("connector.multisig.removeWalletRecords") }}
             </div>
             <div class="flex flex-col gap-2">
               <Label for="remove-confirmation-input">{{

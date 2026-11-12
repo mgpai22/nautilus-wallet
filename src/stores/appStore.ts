@@ -18,6 +18,7 @@ import { utxosDbService } from "@/database/utxosDbService";
 import { PasswordKind, WalletPatch, walletsDbService } from "@/database/walletsDbService";
 import { sendBackendServerUrl } from "@/extension/connector/rpc/uiRpcHandlers";
 import { IDbWallet, NotNullId } from "@/types/database";
+import { removeWalletRecords } from "@/extension/connector/multisig/nonceStore";
 import { useChainStore } from "./chainStore";
 import { TransportType } from "@/common/ledger";
 
@@ -126,7 +127,9 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function deleteWallet(id: number) {
-    await walletsDbService.delete(id);
+    const wallet = await walletsDbService.getById(id);
+    const remove = () => walletsDbService.delete(id);
+    await (wallet ? removeWalletRecords(hex.decode(wallet.publicKey), remove) : remove());
     await loadWallets();
   }
 

@@ -133,8 +133,15 @@ beforeAll(async () => {
   bob = await HdKey.fromMnemonic(generateMnemonic());
 });
 
+/** The wallets' records of the two keys, as the wallet's storage holds them: only the public key matters. */
+function storeWallets() {
+  local.set("wallet:1", { id: 1, publicKey: hex.encode(alice.publicKey) });
+  local.set("wallet:2", { id: 2, publicKey: hex.encode(bob.publicKey) });
+}
+
 beforeEach(() => {
   local.clear();
+  storeWallets();
   storageApi.heldSet = undefined;
 });
 
@@ -143,6 +150,7 @@ describe("the core's store suite", () => {
   const cases = nonceStoreCases(
     async () => {
       local.clear();
+      storeWallets();
       return () => openNonceStore(alice);
     },
     (nonce) => kept.push(nonce)
@@ -211,6 +219,28 @@ describe("the nonce store", () => {
     expect(movedRejects, "the get of the moved value rejects").toBe(true);
   });
 
+  // A store opened before its wallet was removed must stop writing, so a put or a bind queued
+  // behind the removal stores no record of a wallet that is gone.
+  it("rejects a put and a bind once its wallet is no longer stored, and writes nothing", async () => {
+    const txId = hex.encode(random(32));
+    const store = await openNonceStore(alice);
+    await store.put([newRecord(txId, 0, 0)]);
+    local.delete("wallet:1");
+    const before = JSON.stringify([...local]);
+
+    const put = await store.put([newRecord(hex.encode(random(32)), 0, 0)]).then(
+      () => false,
+      (error: unknown) => error instanceof Error
+    );
+    const bind = await store.bind(txId, [{ input: 0, challenge: random(24), simulated: [] }]).then(
+      () => false,
+      (error: unknown) => error instanceof Error
+    );
+
+    expect({ put, bind }, "both reject").toEqual({ put: true, bind: true });
+    expect(JSON.stringify([...local]) === before, "storage is as it was").toBe(true);
+  });
+
   // A commitment must not leave the window before its record is stored: a put that resolves
   // before storage.local.set did, or a get that answers from memory, fails here.
   it("lets commit return its text only when the record is in storage", async () => {
@@ -241,6 +271,7 @@ describe("the nonce store", () => {
     }
 
     local.clear();
+    storeWallets();
     const dropped = holdNextSet();
     const lost = commit(csr, keys, await openNonceStore(alice));
     await dropped.started;
