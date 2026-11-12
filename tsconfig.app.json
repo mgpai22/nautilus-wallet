@@ -7,6 +7,8 @@
     "verbatimModuleSyntax": false,
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "paths": {
+      "@ergo-msig/core/nonce-store-suite": ["../ergo-msig/packages/core/test/support/nonce-store-suite.ts"],
+      "@ergo-msig/core": ["../ergo-msig/packages/core/src/index.ts"],
       "@/*": ["./src/*"]
     },
     "types": ["vite/client", "chrome", "w3c-web-usb"]

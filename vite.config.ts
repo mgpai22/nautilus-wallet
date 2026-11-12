@@ -52,6 +52,8 @@ const plugins = [
 export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
+      "@ergo-msig/core/nonce-store-suite": r("../ergo-msig/packages/core/test/support/nonce-store-suite.ts"),
+      "@ergo-msig/core": r("../ergo-msig/packages/core/src/index.ts"),
       "@": fileURLToPath(new URL("./src", import.meta.url)),
       clsx: "cn" // dedupe class-variance-authority's clsx import
     }
