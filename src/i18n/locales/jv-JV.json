@@ -458,6 +458,14 @@
     "signTx": {
       "fullTxHeader": "{host} nyuwun nandhani transaksi.",
       "partialTxHeader": "{host} nyuwun nandhani transaksi sebagean"
+    },
+    "multisig": {
+      "commitHeader": "{host} requests a commitment to the transactions below.",
+      "signHeader": "{host} requests a signature on the transactions below.",
+      "transactions": "{count} transaction | {count} transactions",
+      "item": "Transaction {position}",
+      "notRead": "Not read",
+      "declined": "The signer declined this run."
     }
   },
   "validation": {

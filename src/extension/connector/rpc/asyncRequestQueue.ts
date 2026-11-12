@@ -1,5 +1,6 @@
 import { InternalRequest } from "@/extension/connector/rpc/protocol";
 import type { AuthArgs, SignDataArgs, SignTxArgs, SignTxInputsArgs } from "@/types/d.ts/webext-rpc";
+import type { MultisigArgs } from "@/types/d.ts/webext-rpc";
 
 export type AsyncRequest<T = unknown> = {
   type: InternalRequest;
@@ -18,6 +19,8 @@ export type AsyncRequestType =
   | InternalRequest.SignTx
   | InternalRequest.SignTxInputs
   | InternalRequest.Auth
+  | InternalRequest.MultisigCommit
+  | InternalRequest.MultisigSign
   | InternalRequest.SignData;
 
 export class AsyncRequestQueue {
@@ -44,6 +47,8 @@ export class AsyncRequestQueue {
   pop(type: InternalRequest.Connect): AsyncRequest | undefined;
   pop(type: InternalRequest.SignTx): AsyncRequest<SignTxArgs> | undefined;
   pop(type: InternalRequest.SignTxInputs): AsyncRequest<SignTxInputsArgs> | undefined;
+  pop(type: InternalRequest.MultisigCommit): AsyncRequest<MultisigArgs> | undefined;
+  pop(type: InternalRequest.MultisigSign): AsyncRequest<MultisigArgs> | undefined;
   pop(type?: InternalRequest): AsyncRequest | undefined {
     if (!type) return this.#queue.pop();
 

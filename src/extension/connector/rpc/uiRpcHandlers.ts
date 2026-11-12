@@ -17,6 +17,8 @@ export function registerRpcHooks() {
   onMessage(InternalRequest.SignTx, fromBackground(InternalRequest.SignTx));
   onMessage(InternalRequest.SignData, fromBackground(InternalRequest.SignData));
   onMessage(InternalRequest.SignTxInputs, fromBackground(InternalRequest.SignTxInputs));
+  onMessage(InternalRequest.MultisigCommit, fromBackground(InternalRequest.MultisigCommit));
+  onMessage(InternalRequest.MultisigSign, fromBackground(InternalRequest.MultisigSign));
 }
 
 export function isFromBackground(sender: Pick<Endpoint, "context">) {
@@ -48,4 +50,6 @@ function getRoute(requestType: AsyncRequestType) {
   if (requestType === InternalRequest.SignTx) return "connector-sign-tx";
   if (requestType === InternalRequest.SignTxInputs) return "connector-sign-tx";
   if (requestType === InternalRequest.SignData) return "connector-sign-data";
+  if (requestType === InternalRequest.MultisigCommit) return "connector-multisig";
+  if (requestType === InternalRequest.MultisigSign) return "connector-multisig";
 }

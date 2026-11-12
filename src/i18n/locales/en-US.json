@@ -457,6 +457,14 @@
     "signTx": {
       "fullTxHeader": "{host} requests to sign a transaction.",
       "partialTxHeader": "{host} requests to partially sign a transaction"
+    },
+    "multisig": {
+      "commitHeader": "{host} requests a commitment to the transactions below.",
+      "signHeader": "{host} requests a signature on the transactions below.",
+      "transactions": "{count} transaction | {count} transactions",
+      "item": "Transaction {position}",
+      "notRead": "Not read",
+      "declined": "The signer declined this run."
     }
   },
   "validation": {

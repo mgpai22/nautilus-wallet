@@ -23,6 +23,7 @@ import {
   InternalRequest,
   success
 } from "../connector/rpc/protocol";
+import { readItems } from "../connector/rpc/multisigItems";
 import {
   checkConnection,
   getAddresses,
@@ -198,6 +199,29 @@ onMessageAuth(InternalRequest.SignTxInputs, async (msg) => {
   const argsHash = `${txHash}:${indexes.join(",")}`;
   return await openWindow(InternalRequest.SignTxInputs, msg.data, msg.sender.tabId, argsHash);
 });
+
+onMessageAuth(InternalRequest.MultisigCommit, (msg) =>
+  handleMultisigRun(InternalRequest.MultisigCommit, msg.data, msg.sender.tabId)
+);
+onMessageAuth(InternalRequest.MultisigSign, (msg) =>
+  handleMultisigRun(InternalRequest.MultisigSign, msg.data, msg.sender.tabId)
+);
+
+/**
+ * Runs the item checks again, whatever the content script did, and opens the review window
+ * with the items built anew: nothing else of the message travels on.
+ */
+async function handleMultisigRun(
+  request: InternalRequest.MultisigCommit | InternalRequest.MultisigSign,
+  data: DataWithPayload<{ items?: unknown }>,
+  tabId: number
+) {
+  const items = readItems(data.items);
+  if (typeof items === "string") return invalidRequest(items);
+
+  const run = { items, payload: { origin: data.payload.origin } };
+  return await openWindow(request, run, tabId);
+}
 
 onMessage(InternalEvent.Loaded, async ({ sender }) => {
   if (!isInternalEndpoint(sender)) return;

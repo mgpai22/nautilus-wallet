@@ -457,6 +457,14 @@
     "signTx": {
       "fullTxHeader": "{host} 请求签署一笔交易。",
       "partialTxHeader": "{host} 请求部分签署一笔交易"
+    },
+    "multisig": {
+      "commitHeader": "{host} requests a commitment to the transactions below.",
+      "signHeader": "{host} requests a signature on the transactions below.",
+      "transactions": "{count} transaction | {count} transactions",
+      "item": "Transaction {position}",
+      "notRead": "Not read",
+      "declined": "The signer declined this run."
     }
   },
   "validation": {

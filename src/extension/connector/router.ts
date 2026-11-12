@@ -20,6 +20,12 @@ const routes: Array<RouteRecordRaw> = [
     meta: { title: "Data signature" }
   },
   {
+    path: "/multisig",
+    name: "connector-multisig",
+    component: () => import("./views/MultisigReviewView.vue"),
+    meta: { title: "Multi-signature review" }
+  },
+  {
     path: "/auth",
     name: "connector-auth",
     component: () => import("./views/AuthView.vue"),
