@@ -66,21 +66,30 @@ export const BAD_RUNS: BadRun[] = [
 
 /**
  * Runs `call` and asserts that it opened no window. One more round trip to the background
- * follows the call, so a window the background opened late is seen too.
+ * follows the call, so a window the background opened late is seen too. A call that opens a
+ * window may wait on it for good, so the first window ends the wait and fails the test.
  */
 export async function expectNoWindow<R>(
   context: BrowserContext,
   page: Page,
   call: () => Promise<R>
 ): Promise<R> {
-  const opened: string[] = [];
-  const onPage = (p: Page) => opened.push(p.url());
+  const opened: Page[] = [];
+  let windowOpened!: () => void;
+  const firstWindow = new Promise<void>((resolve) => (windowOpened = resolve));
+  const onPage = (p: Page) => {
+    opened.push(p);
+    windowOpened();
+  };
   context.on("page", onPage);
   try {
-    const result = await call();
+    const answered = call();
+    answered.catch(() => undefined);
+    await Promise.race([answered, firstWindow]);
     await page.evaluate(() => window.ergoConnector.nautilus.isAuthorized());
-    expect(opened, "windows opened").toEqual([]);
-    return result;
+    // with no window this passes at once; a window's last URL names the route it reached
+    await expect.poll(() => opened.map((p) => p.url()), { message: "windows opened" }).toEqual([]);
+    return await answered;
   } finally {
     context.off("page", onPage);
   }

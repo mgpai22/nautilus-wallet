@@ -15,6 +15,7 @@ import { runMigrations } from "@/database/migrations";
 import { clearStaleMask, EXPIRY_ALARM } from "@/database/unlockSession";
 import { walletsDbService } from "@/database/walletsDbService";
 import { APIErrorCode, TxSendErrorCode } from "@/types/connector";
+import type { MultisigEntry } from "@/types/d.ts/webext-rpc";
 import { AsyncRequestQueue, AsyncRequestType } from "../connector/rpc/asyncRequestQueue";
 import {
   DataWithPayload,
@@ -200,24 +201,34 @@ onMessageAuth(InternalRequest.SignTxInputs, async (msg) => {
   return await openWindow(InternalRequest.SignTxInputs, msg.data, msg.sender.tabId, argsHash);
 });
 
-onMessageAuth(InternalRequest.MultisigCommit, (msg) =>
-  handleMultisigRun(InternalRequest.MultisigCommit, msg.data, msg.sender.tabId)
+onMessageAuth(InternalRequest.MultisigCommit, (msg, walletId) =>
+  handleMultisigRun(InternalRequest.MultisigCommit, msg.data, msg.sender.tabId, walletId)
 );
-onMessageAuth(InternalRequest.MultisigSign, (msg) =>
-  handleMultisigRun(InternalRequest.MultisigSign, msg.data, msg.sender.tabId)
+onMessageAuth(InternalRequest.MultisigSign, (msg, walletId) =>
+  handleMultisigRun(InternalRequest.MultisigSign, msg.data, msg.sender.tabId, walletId)
 );
 
 /**
  * Runs the item checks again, whatever the content script did, and opens the review window
- * with the items built anew: nothing else of the message travels on.
+ * with the items built anew: nothing else of the message travels on. A wallet that is not
+ * standard cannot take part, so its run is answered without a window.
  */
 async function handleMultisigRun(
   request: InternalRequest.MultisigCommit | InternalRequest.MultisigSign,
   data: DataWithPayload<{ items?: unknown }>,
-  tabId: number
+  tabId: number,
+  walletId: number
 ) {
   const items = readItems(data.items);
   if (typeof items === "string") return invalidRequest(items);
+
+  const wallet = await walletsDbService.getById(walletId);
+  if (wallet?.type !== "standard") {
+    const message = "Only a standard wallet can take part in a multi-sig run.";
+    return success(
+      items.map(({ id }): MultisigEntry => ({ id, ok: false, code: "unsupported", message }))
+    );
+  }
 
   const run = { items, payload: { origin: data.payload.origin } };
   return await openWindow(request, run, tabId);
