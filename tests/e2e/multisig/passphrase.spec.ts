@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from "@playwright/test";
+import { generateMnemonic } from "@fleet-sdk/wallet";
 import { expect, test } from "../fixtures/test";
 import { addressOf, WALLET_A } from "../fixtures/wallets";
 import { clickToClose, connectDapp, invoke, withConnectorWindow } from "../pages/connector";
@@ -221,5 +222,135 @@ test.describe("restore with a BIP39 passphrase", () => {
     expect(await drawer.innerText(), "the dialog's text holds the passphrase").not.toContain(
       passphrase.trim()
     );
+  });
+});
+
+test.describe("restore form at the popup's smallest size", () => {
+  /**
+   * Puts every scrolled box back at the top. Clicks while the form is built scroll a box by
+   * script, even one with `overflow: hidden`, and that would reach the fields for the signer.
+   */
+  const scrollToTop = (page: Page) =>
+    page.evaluate(() => {
+      for (const el of document.querySelectorAll("*")) el.scrollTop = 0;
+      window.scrollTo(0, 0);
+    });
+
+  /**
+   * Brings `target` fully into the viewport the way a signer does: the mouse wheel over the form.
+   * A wheel never scrolls a box with `overflow: hidden`. `scrollIntoView`, `focus`, a click and a
+   * fill all do, so none of them reaches a field here.
+   */
+  async function wheelTo(page: Page, target: ReturnType<Page["locator"]>) {
+    const height = page.viewportSize()!.height;
+    const form = (await page.locator("form").first().boundingBox())!;
+    const x = form.x + form.width / 2;
+    const y = (Math.max(form.y, 0) + Math.min(form.y + form.height, height)) / 2;
+
+    await expect(async () => {
+      const box = (await target.boundingBox())!;
+      await page.mouse.move(x, y);
+      await page.mouse.wheel(0, box.y < 0 ? -100 : 100);
+      await expect(target).toBeInViewport({ ratio: 1 });
+    }, `the wheel brings ${target} into the viewport`).toPass({ timeout: 5_000 });
+  }
+
+  /**
+   * Reads the boxes of every control of the form and returns those that touch an edge of the
+   * scrolling box: the right edge needs 13 px (the 10 px scrollbar and a 3 px focus ring), the
+   * left edge 3 px (a ring). The boxes are read only; nothing scrolls. `count` guards against a
+   * selector that matches too little.
+   */
+  const crowdedControls = (page: Page) =>
+    page.evaluate(() => {
+      const area = document
+        .querySelector("[data-slot=scroll-area-viewport]")!
+        .getBoundingClientRect();
+      const controls = [
+        ...document.querySelectorAll(
+          "form button[role=combobox], form .grid > div, #has-passphrase, #passphrase, #confirm-passphrase"
+        )
+      ];
+      const crowded = controls
+        .map((el) => ({ el, box: el.getBoundingClientRect() }))
+        .filter(({ box }) => box.right > area.right - 13 || box.left < area.left + 3)
+        .map(({ el, box }) => `${el.id || el.className.slice(0, 30)}: ${box.left}..${box.right}`);
+      return { count: controls.length, crowded, area: `${area.left}..${area.right}` };
+    });
+
+  /** No control sits under the scrollbar or against the edge, at the place the signer stopped. */
+  async function expectClearOfEdges(page: Page, count: number) {
+    const found = await crowdedControls(page);
+    expect(found.count, "controls measured: the select, 24 words, the switch, the fields").toBe(
+      count
+    );
+    expect(
+      found.crowded,
+      `controls closer to the edges of ${found.area} than the scrollbar and rings need`
+    ).toEqual([]);
+  }
+
+  // The restore page, taller than the popup, scrolls for the signer. A click or a fill would pass
+  // here even when it does not, because the page's own scripts scroll a box with overflow hidden.
+  // The scrollbar does not cover the switch or the fields, and focus rings are not cut at the edge
+  // of the scrolling box.
+  test("reaches the switch and both passphrase fields by wheel, with Import in view", async ({
+    popup
+  }, testInfo) => {
+    const page = popup.page;
+    const capture = (state: string, theme: "light" | "dark") =>
+      page.screenshot({ path: testInfo.outputPath(`restore-small-${state}-${theme}.png`) });
+    await page.setViewportSize({ width: 360, height: 600 });
+    await openSecretStep(popup, {
+      name: "Small",
+      mnemonic: generateMnemonic(256),
+      password: "correct horse battery"
+    });
+    await expect(page.locator("form .grid input")).toHaveCount(24);
+    await scrollToTop(page);
+
+    const controls = {
+      switch: page.locator("#has-passphrase"),
+      passphrase: page.locator("#passphrase"),
+      confirm: page.locator("#confirm-passphrase")
+    };
+
+    // the switch is off: Import shows with no scroll, and the switch can be reached
+    await expect(importButton(popup)).toBeInViewport({ ratio: 1 });
+    await capture("switch-off", "light");
+    await wheelTo(page, controls.switch);
+    await expect(importButton(popup)).toBeInViewport({ ratio: 1 });
+    await expectClearOfEdges(page, 26);
+
+    // a click at the switch's place turns it on: no script scrolls the page to it
+    const box = (await controls.switch.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(controls.switch).toHaveAttribute("aria-checked", "true");
+    await expect(importButton(popup)).toBeInViewport({ ratio: 1 });
+
+    for (const [field, state] of [
+      [controls.passphrase, "switch-on-passphrase"],
+      [controls.confirm, "switch-on-confirm"],
+      [controls.switch, undefined]
+    ] as const) {
+      await wheelTo(page, field);
+      await expect(importButton(popup)).toBeInViewport({ ratio: 1 });
+      await expectClearOfEdges(page, 28);
+      if (state) await capture(state, "light");
+    }
+
+    // the keyboard focus ring on the field, in both themes: Tab moves from the switch
+    await page.keyboard.press("Tab");
+    await expect(controls.passphrase).toBeFocused();
+    await wheelTo(page, controls.passphrase);
+    await capture("switch-on-focus-passphrase", "light");
+    await page.emulateMedia({ colorScheme: "dark" });
+    await capture("switch-on-focus-passphrase", "dark");
+
+    // back at the top, in the dark theme
+    await page.mouse.wheel(0, -1000);
+    await expect(page.getByRole("heading", { name: "Wallet secret" })).toBeInViewport({ ratio: 1 });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await capture("switch-on-rest", "dark");
   });
 });
