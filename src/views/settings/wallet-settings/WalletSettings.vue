@@ -3,7 +3,6 @@ import { computed, ref, watch } from "vue";
 import { useRegle } from "@regle/core";
 import { required, withMessage } from "@regle/rules";
 import { Loader2Icon } from "@lucide/vue";
-import { hex } from "@fleet-sdk/crypto";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/appStore";
 import { useWalletStore } from "@/stores/walletStore";
@@ -27,7 +26,6 @@ import { useToast } from "@/components/ui/toast";
 import { MnemonicBackupDialog } from "@/components/wallet";
 import { log } from "@/common/logger";
 import { extractErrorMessage } from "@/common/utils";
-import { listRecords } from "@/extension/connector/multisig/nonceStore";
 import { useProgrammaticDialog } from "@/composables/useProgrammaticDialog";
 import { usePasswordKind } from "@/composables/usePasswordPrompt";
 import PasswordDialog from "../PasswordDialog.vue";
@@ -75,25 +73,8 @@ watch(
 const removeConfirmation = ref("");
 const canRemove = computed(() => removeConfirmation.value.trim() === wallet.name.trim());
 
-// the removal deletes the wallet's multi-signature records: the signer is told when it has any
-const hasRecords = ref(false);
-
-async function loadHasRecords() {
-  try {
-    hasRecords.value = (await listRecords(hex.decode(wallet.publicKey))).length > 0;
-  } catch (e) {
-    log.error(e);
-    // when the records cannot be read, the warning is shown: it is the safe side
-    hasRecords.value = true;
-  }
-}
-
 function resetRemoveConfirmation(open: boolean) {
-  if (!open) return;
-
-  removeConfirmation.value = "";
-  hasRecords.value = false;
-  loadHasRecords();
+  if (open) removeConfirmation.value = "";
 }
 
 const resyncing = ref(false);
@@ -237,7 +218,7 @@ const { r$ } = useRegle(
             <div v-once>
               {{ t("settings.wallet.walletRemoveConfirmationDesc") }}
             </div>
-            <div v-if="hasRecords" class="font-medium">
+            <div v-if="isStandard" class="font-medium">
               {{ t("connector.multisig.removeWalletRecords") }}
             </div>
             <div class="flex flex-col gap-2">

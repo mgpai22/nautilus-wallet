@@ -25,6 +25,7 @@ import {
   openWalletSettings,
   recordsRegion,
   REGION_NAME,
+  REMOVAL_WARNING,
   rowRemove,
   WARNING
 } from "./records";
@@ -726,6 +727,19 @@ test.describe("stored records screens", () => {
     const region = recordsRegion(page);
     await expect(region.getByText(EMPTY_TEXT)).toBeVisible();
     await checkPopupScreen(page, testInfo, "empty", { scope: region, inView: [region], stops: {} });
+
+    // The removal warning does not depend on a check made when the drawer opens, so a wallet whose
+    // first record is written while the drawer is open still warns before its removal.
+    await page.getByRole("button", { name: "Remove", exact: true }).click();
+    const removal = page.getByRole("dialog");
+    await expect(removal, "a wallet with no record").toContainText(REMOVAL_WARNING);
+    await checkPopupScreen(page, testInfo, "wallet-removal", {
+      scope: removal,
+      inView: [removal.getByRole("button", { name: "Cancel" })],
+      stops: { Cancel: 1 }
+    });
+    await removal.getByRole("button", { name: "Cancel" }).click();
+    await expect(removal).toBeHidden();
 
     await commitRecords(context, dapp, WALLET_A, [1, 2, 3]);
     await page.reload();

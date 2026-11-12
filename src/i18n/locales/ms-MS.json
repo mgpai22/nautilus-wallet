@@ -496,7 +496,7 @@
       "removeRecordTitle": "Remove this record?",
       "removeRecordDesc": "An open transaction whose record is removed can no longer be signed by this signer.",
       "removeRecordFailed": "Failed to remove the record",
-      "removeWalletRecords": "Removing this wallet also deletes its multi-signature records. Restoring the wallet does not bring back the ability to sign the open transactions they belong to."
+      "removeWalletRecords": "Removing this wallet also deletes its multi-signature records. A transaction it committed to can then no longer be signed by this wallet, even if you restore it."
     }
   },
   "validation": {

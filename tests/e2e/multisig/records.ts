@@ -19,9 +19,9 @@ export const EMPTY_TEXT = "No records stored for this wallet.";
 export const WARNING =
   /an open transaction whose record is removed can no longer be signed by this signer/i;
 
-/** What the wallet's own removal drawer tells the signer when the wallet has records. */
+/** What the wallet's own removal drawer tells the signer of a standard wallet, records or not. */
 export const REMOVAL_WARNING =
-  /deletes its multi-signature records\. Restoring the wallet does not bring back the ability to sign/i;
+  /deletes its multi-signature records\. A transaction it committed to can then no longer be signed by this wallet, even if you restore it/i;
 
 export const recordsRegion = (page: Page) => page.getByRole("region", { name: REGION_NAME });
 
